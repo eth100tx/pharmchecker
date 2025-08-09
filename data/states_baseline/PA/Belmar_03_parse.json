@@ -1,0 +1,57 @@
+{
+  "metadata": {
+    "pharmacy_name": "Belmar",
+    "search_timestamp": "2025-08-03T14:03:15.404204",
+    "state": "PA",
+    "scraper_version": "1.0.0",
+    "json_generated_timestamp": "2025-08-03T14:03:15.404208",
+    "source_html_file": "/home/eric/ai/pharmchecker/data/2025-08-03/PA/Belmar_03.html",
+    "source_image_file": "data/states_baseline/PA/Belmar_03.png",
+    "search_result_type": "pharmacy_data",
+    "output_directory": "/home/eric/ai/pharmchecker/data/2025-08-03/PA"
+  },
+  "search_result": {
+    "licenses": [
+      {
+        "pharmacy_name": "BELMAR PHARMACY",
+        "license_number": "NP000338",
+        "license_status": "Active",
+        "license_type": "Nonresident Pharmacy",
+        "issue_date": null,
+        "expiration_date": "8/31/2027",
+        "address": {
+          "street": "231 VIOLET STREET",
+          "suite": "",
+          "city": "GOLDEN",
+          "state": "Colorado",
+          "zip_code": "80401"
+        },
+        "contact": {
+          "phone": null,
+          "email": null
+        },
+        "additional_info": {
+          "specialties": []
+        }
+      }
+    ],
+    "result_status": "found",
+    "search_query": "Belmar"
+  },
+  "debug_info": {
+    "raw_license_data": {
+      "license_number": "NP000338",
+      "license_type": "Nonresident Pharmacy",
+      "license_status": "Active",
+      "pharmacy_name": "BELMAR PHARMACY",
+      "expiration_date": "8/31/2027",
+      "address_street": "231 VIOLET STREET",
+      "address_city": "GOLDEN",
+      "address_state": "Colorado",
+      "address_zip": "80401"
+    },
+    "parser_strategy": "Regex-based parsing for PA licensing system (fast)"
+  },
+  "errors": [],
+  "warnings": []
+}

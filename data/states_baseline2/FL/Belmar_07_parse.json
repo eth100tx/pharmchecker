@@ -1,0 +1,68 @@
+{
+  "metadata": {
+    "pharmacy_name": "Belmar",
+    "search_timestamp": "2025-08-03T14:03:10.173984",
+    "state": "FL",
+    "scraper_version": "1.0.0",
+    "json_generated_timestamp": "2025-08-03T14:03:10.173994",
+    "source_html_file": "/home/eric/ai/pharmchecker/data/2025-08-03/FL/Belmar_07.html",
+    "source_image_file": "data/states_baseline2/FL/Belmar_07.png",
+    "source_excel_file": null,
+    "search_result_type": "pharmacy_data"
+  },
+  "search_result": {
+    "licenses": [
+      {
+        "pharmacy_name": "Belmar Pharmacy Florida, LLC",
+        "license_number": "PH34652",
+        "license_status": "Clear/",
+        "license_type": "Pharmacy Community Pharmacy Schedule II & III",
+        "issue_date": "06/28/2023",
+        "expiration_date": "2/28/2027",
+        "address": {
+          "street": "2500 Lakepointe Parkway",
+          "suite": "",
+          "city": "ODESSA",
+          "state": "FL",
+          "zip_code": "33556"
+        },
+        "contact": {
+          "phone": null,
+          "email": null
+        },
+        "additional_info": {
+          "specialties": [
+            "Community Pharmacy",
+            "Schedule II & III"
+          ]
+        }
+      }
+    ],
+    "result_status": "found",
+    "search_query": "Belmar"
+  },
+  "debug_info": {
+    "parser_class": "FLParser",
+    "state_processor": "FL",
+    "processing_timestamp": "2025-08-03T14:03:10.173997",
+    "raw_license_data": {
+      "license_number": "PH34652",
+      "pharmacy_name": "Belmar Pharmacy Florida, LLC",
+      "license_status": "Clear/",
+      "specialties": [
+        "Community Pharmacy",
+        "Schedule II & III"
+      ],
+      "expiration_date": "2/28/2027",
+      "issue_date": "06/28/2023",
+      "address_street": "2500 Lakepointe Parkway",
+      "full_address": "2500 Lakepointe Parkway ODESSA, FL 33556",
+      "address_zip": "33556",
+      "address_state": "FL",
+      "address_city": "ODESSA"
+    },
+    "parser_strategy": "BeautifulSoup HTML parsing"
+  },
+  "errors": [],
+  "warnings": []
+}

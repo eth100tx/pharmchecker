@@ -1,0 +1,66 @@
+{
+  "metadata": {
+    "pharmacy_name": "Beaker",
+    "search_timestamp": "2025-08-03T14:03:10.105232",
+    "state": "FL",
+    "scraper_version": "1.0.0",
+    "json_generated_timestamp": "2025-08-03T14:03:10.105241",
+    "source_html_file": "/home/eric/ai/pharmchecker/data/2025-08-03/FL/Beaker_01.html",
+    "source_image_file": "data/states_baseline2/FL/Beaker_01.png",
+    "source_excel_file": null,
+    "search_result_type": "pharmacy_data"
+  },
+  "search_result": {
+    "licenses": [
+      {
+        "pharmacy_name": "Beaker Pharmacy",
+        "license_number": "PH32481",
+        "license_status": "Clear/",
+        "license_type": "Pharmacy Special Non-Resident",
+        "issue_date": "12/12/2019",
+        "expiration_date": "2/28/2027",
+        "address": {
+          "street": "7810 Eldorado Pkwy",
+          "suite": "",
+          "city": "Suite 200 MCKINNEY",
+          "state": "TX",
+          "zip_code": "75070"
+        },
+        "contact": {
+          "phone": null,
+          "email": null
+        },
+        "additional_info": {
+          "specialties": [
+            "Special Non-Resident"
+          ]
+        }
+      }
+    ],
+    "result_status": "found",
+    "search_query": "Beaker"
+  },
+  "debug_info": {
+    "parser_class": "FLParser",
+    "state_processor": "FL",
+    "processing_timestamp": "2025-08-03T14:03:10.105244",
+    "raw_license_data": {
+      "license_number": "PH32481",
+      "pharmacy_name": "Beaker Pharmacy",
+      "license_status": "Clear/",
+      "specialties": [
+        "Special Non-Resident"
+      ],
+      "expiration_date": "2/28/2027",
+      "issue_date": "12/12/2019",
+      "address_street": "7810 Eldorado Pkwy",
+      "full_address": "7810 Eldorado Pkwy Suite 200 MCKINNEY, TX 75070",
+      "address_zip": "75070",
+      "address_state": "TX",
+      "address_city": "Suite 200 MCKINNEY"
+    },
+    "parser_strategy": "BeautifulSoup HTML parsing"
+  },
+  "errors": [],
+  "warnings": []
+}

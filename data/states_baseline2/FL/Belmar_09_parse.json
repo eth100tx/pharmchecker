@@ -1,0 +1,66 @@
+{
+  "metadata": {
+    "pharmacy_name": "Belmar",
+    "search_timestamp": "2025-08-03T14:03:10.193602",
+    "state": "FL",
+    "scraper_version": "1.0.0",
+    "json_generated_timestamp": "2025-08-03T14:03:10.193613",
+    "source_html_file": "/home/eric/ai/pharmchecker/data/2025-08-03/FL/Belmar_09.html",
+    "source_image_file": "data/states_baseline2/FL/Belmar_09.png",
+    "source_excel_file": null,
+    "search_result_type": "pharmacy_data"
+  },
+  "search_result": {
+    "licenses": [
+      {
+        "pharmacy_name": "BELMAR SELECT OUTSOURCING",
+        "license_number": "NSC184",
+        "license_status": "Clear/",
+        "license_type": "Pharmacy Outsourcing Facility",
+        "issue_date": "09/14/2016",
+        "expiration_date": "2/28/2027",
+        "address": {
+          "street": "12860 W. CEDAR",
+          "suite": "",
+          "city": "DR. SUITE 211 DENVER",
+          "state": "CO",
+          "zip_code": "80228"
+        },
+        "contact": {
+          "phone": null,
+          "email": null
+        },
+        "additional_info": {
+          "specialties": [
+            "Outsourcing Facility"
+          ]
+        }
+      }
+    ],
+    "result_status": "found",
+    "search_query": "Belmar"
+  },
+  "debug_info": {
+    "parser_class": "FLParser",
+    "state_processor": "FL",
+    "processing_timestamp": "2025-08-03T14:03:10.193617",
+    "raw_license_data": {
+      "license_number": "NSC184",
+      "pharmacy_name": "BELMAR SELECT OUTSOURCING",
+      "license_status": "Clear/",
+      "specialties": [
+        "Outsourcing Facility"
+      ],
+      "expiration_date": "2/28/2027",
+      "issue_date": "09/14/2016",
+      "address_street": "12860 W. CEDAR",
+      "full_address": "12860 W. CEDAR DR. SUITE 211 DENVER, CO 80228",
+      "address_zip": "80228",
+      "address_state": "CO",
+      "address_city": "DR. SUITE 211 DENVER"
+    },
+    "parser_strategy": "BeautifulSoup HTML parsing"
+  },
+  "errors": [],
+  "warnings": []
+}

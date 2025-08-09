@@ -1,0 +1,66 @@
+{
+  "metadata": {
+    "pharmacy_name": "Empower",
+    "search_timestamp": "2025-08-03T14:03:10.327736",
+    "state": "FL",
+    "scraper_version": "1.0.0",
+    "json_generated_timestamp": "2025-08-03T14:03:10.327743",
+    "source_html_file": "/home/eric/ai/pharmchecker/data/2025-08-03/FL/Empower_01.html",
+    "source_image_file": "data/states_baseline2/FL/Empower_01.png",
+    "source_excel_file": null,
+    "search_result_type": "pharmacy_data"
+  },
+  "search_result": {
+    "licenses": [
+      {
+        "pharmacy_name": "EMPOWER CLINIC SERVICES, LLC",
+        "license_number": "PH26623",
+        "license_status": "Clear/",
+        "license_type": "Pharmacy Non-Resident",
+        "issue_date": "01/15/2013",
+        "expiration_date": "2/28/2027",
+        "address": {
+          "street": "7601 N Sam",
+          "suite": "",
+          "city": "Houston Pkwy W STE 100 HOUSTON",
+          "state": "TX",
+          "zip_code": "77064"
+        },
+        "contact": {
+          "phone": null,
+          "email": null
+        },
+        "additional_info": {
+          "specialties": [
+            "Non-Resident"
+          ]
+        }
+      }
+    ],
+    "result_status": "found",
+    "search_query": "Empower"
+  },
+  "debug_info": {
+    "parser_class": "FLParser",
+    "state_processor": "FL",
+    "processing_timestamp": "2025-08-03T14:03:10.327746",
+    "raw_license_data": {
+      "license_number": "PH26623",
+      "pharmacy_name": "EMPOWER CLINIC SERVICES, LLC",
+      "license_status": "Clear/",
+      "specialties": [
+        "Non-Resident"
+      ],
+      "expiration_date": "2/28/2027",
+      "issue_date": "01/15/2013",
+      "address_street": "7601 N Sam",
+      "full_address": "7601 N Sam Houston Pkwy W STE 100 HOUSTON, TX 77064",
+      "address_zip": "77064",
+      "address_state": "TX",
+      "address_city": "Houston Pkwy W STE 100 HOUSTON"
+    },
+    "parser_strategy": "BeautifulSoup HTML parsing"
+  },
+  "errors": [],
+  "warnings": []
+}

@@ -1,0 +1,48 @@
+{
+  "metadata": {
+    "pharmacy_name": "Beaker",
+    "search_timestamp": "2025-08-03T14:03:15.399839",
+    "state": "PA",
+    "scraper_version": "1.0.0",
+    "json_generated_timestamp": "2025-08-03T14:03:15.399844",
+    "source_html_file": "/home/eric/ai/pharmchecker/data/2025-08-03/PA/Beaker_01.html",
+    "source_image_file": "data/states_baseline/PA/Beaker_01.png",
+    "search_result_type": "no_results_found",
+    "output_directory": "/home/eric/ai/pharmchecker/data/2025-08-03/PA"
+  },
+  "search_result": {
+    "licenses": [
+      {
+        "pharmacy_name": "Beaker",
+        "license_number": null,
+        "license_status": null,
+        "license_type": "Pharmacy",
+        "issue_date": null,
+        "expiration_date": null,
+        "address": {
+          "street": null,
+          "suite": "",
+          "city": null,
+          "state": "PA",
+          "zip_code": null
+        },
+        "contact": {
+          "phone": null,
+          "email": null
+        },
+        "additional_info": {
+          "specialties": []
+        }
+      }
+    ],
+    "result_status": "no_results_found",
+    "search_query": "Beaker"
+  },
+  "debug_info": {
+    "parser_strategy": "No results found in PA database"
+  },
+  "errors": [],
+  "warnings": [
+    "No pharmacy records found for 'Beaker' in PA database"
+  ]
+}
