@@ -1,0 +1,3 @@
+"""
+PharmChecker GUI utilities package
+"""

@@ -10,6 +10,16 @@ This document explains how to run and interpret the PharmChecker system tests.
 python system_test.py
 ```
 
+## GUI Testing ✨
+
+### Running the GUI Tests
+
+```bash
+python test_gui.py
+```
+
+This validates the MVP Streamlit web interface components.
+
 ### What the Test Does
 
 The system test performs a complete workflow validation:
@@ -233,3 +243,15 @@ For manual validation of the complete system:
 5. **Verify**: Check that all expected results are correctly classified
 
 The system test validates the complete PharmChecker workflow from data import through address scoring to results classification, ensuring all components work together correctly.
+
+### Web Interface Testing ✨
+
+For complete system validation including the GUI:
+
+1. **Core System**: Follow the manual testing workflow above
+2. **GUI Components**: `python test_gui.py` to validate web interface components
+3. **Web Application**: `streamlit run app.py` to test the complete MVP GUI
+4. **Interface Features**: Test dataset selection, results matrix, scoring dashboard, and detail views
+5. **Integration**: Verify GUI works with sample data and is ready for MCP database connection
+
+The GUI provides comprehensive web-based access to all PharmChecker functionality with interactive features for dataset management, results analysis, and validation workflows.
