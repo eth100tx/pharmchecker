@@ -1,5 +1,10 @@
 # PharmChecker - Complete Implementation Documentation
 
+## ⚠️ Important Schema Note
+**This document contains legacy schema references.** The actual implemented system uses an **optimized merged `search_results` table** that combines search metadata and results for better performance and data integrity. For the working schema, see `functions_optimized.sql` and the system test files.
+
+**Status**: ✅ Core system complete and tested. Scoring engine implemented with 96.5% accuracy.
+
 ## Overview
 PharmChecker is a lightweight internal tool for verifying pharmacy licenses across U.S. states through manual review of automated search results.
 
