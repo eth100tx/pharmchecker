@@ -43,18 +43,22 @@ pairs AS (
     AND p.state_licenses <> '[]'::jsonb
 ),
 latest_searches AS (
-  -- Get most recent search for each (name, state) combination
-  SELECT DISTINCT ON (s.search_name, s.search_state)
-    s.*
-  FROM searches s, dataset_ids d
-  WHERE s.dataset_id = d.states_id
-  ORDER BY s.search_name, s.search_state, s.search_ts DESC NULLS LAST, s.id DESC
+  -- Get most recent search parameters for each (name, state) combination
+  SELECT DISTINCT ON (sr.search_name, sr.search_state)
+    sr.search_name,
+    sr.search_state,
+    sr.search_ts,
+    sr.id AS latest_result_id  -- Representative result for this search
+  FROM search_results sr, dataset_ids d
+  WHERE sr.dataset_id = d.states_id
+  ORDER BY sr.search_name, sr.search_state, sr.search_ts DESC NULLS LAST, sr.id DESC
 ),
 best_scores AS (
-  -- Get best scoring result for each (pharmacy, search) pair
-  SELECT DISTINCT ON (ms.pharmacy_id, sr.search_id)
+  -- Get best scoring result for each (pharmacy, search_name, search_state) pair
+  SELECT DISTINCT ON (ms.pharmacy_id, sr.search_name, sr.search_state)
     ms.pharmacy_id,
-    sr.search_id,
+    sr.search_name,
+    sr.search_state,
     sr.id AS result_id,
     sr.license_number,
     sr.license_status,
@@ -73,7 +77,7 @@ best_scores AS (
   JOIN search_results sr ON sr.id = ms.result_id
   JOIN dataset_ids d ON ms.states_dataset_id = d.states_id 
     AND ms.pharmacies_dataset_id = d.pharmacies_id
-  ORDER BY ms.pharmacy_id, sr.search_id, ms.score_overall DESC NULLS LAST, sr.id
+  ORDER BY ms.pharmacy_id, sr.search_name, sr.search_state, ms.score_overall DESC NULLS LAST, sr.id
 ),
 joined AS (
   -- Join everything together
@@ -81,7 +85,7 @@ joined AS (
     p.pharmacy_id,
     p.pharmacy_name,
     p.state_code AS search_state,
-    ls.id AS latest_search_id,
+    ls.latest_result_id AS latest_search_id,
     bs.result_id,
     bs.license_number,
     bs.license_status,
@@ -101,7 +105,8 @@ joined AS (
     AND ls.search_state = p.state_code
   LEFT JOIN best_scores bs
     ON bs.pharmacy_id = p.pharmacy_id
-    AND bs.search_id = ls.id
+    AND bs.search_name = p.pharmacy_name
+    AND bs.search_state = p.state_code
 ),
 with_overrides AS (
   SELECT
@@ -202,7 +207,7 @@ CREATE OR REPLACE FUNCTION find_missing_scores(
   p_pharmacies_tag TEXT
 ) RETURNS TABLE (
   pharmacy_id INT,
-  search_id INT
+  result_id INT
 ) AS $$
 WITH 
 dataset_ids AS (
@@ -213,22 +218,21 @@ dataset_ids AS (
 needed_pairs AS (
   SELECT DISTINCT 
     p.id as pharmacy_id,
-    s.id as search_id
+    sr.id as result_id
   FROM pharmacies p
   JOIN dataset_ids d ON p.dataset_id = d.pharmacies_id
   CROSS JOIN LATERAL (
-    SELECT s.id
-    FROM searches s
-    WHERE s.dataset_id = d.states_id
-      AND s.search_name = p.name
-      AND s.search_state = ANY(
+    SELECT sr.id
+    FROM search_results sr
+    WHERE sr.dataset_id = d.states_id
+      AND sr.search_name = p.name
+      AND sr.search_state = ANY(
         SELECT (jsonb_array_elements_text(p.state_licenses))::char(2)
       )
-  ) s
+  ) sr
   WHERE NOT EXISTS (
     SELECT 1 
     FROM match_scores ms
-    JOIN search_results sr ON sr.search_id = s.id
     WHERE ms.pharmacy_id = p.id
       AND ms.result_id = sr.id
       AND ms.states_dataset_id = d.states_id

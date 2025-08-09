@@ -655,42 +655,34 @@ class StateImporter(BaseImporter):
             'files': [f.name for f in files]
         }
         
-        # Insert search record
-        with self.conn.cursor() as cur:
-            cur.execute("""
-                INSERT INTO searches (dataset_id, search_name, search_state, search_ts, meta)
-                VALUES (%s, %s, %s, %s, %s)
-                RETURNING id
-            """, (
-                dataset_id,
-                pharmacy_name,
-                state_code,
-                timestamp,
-                json.dumps(search_meta)
-            ))
-            search_id = cur.fetchone()[0]
-            self.conn.commit()
-        
-        # Import results from all files
+        # Import results from all files directly to search_results table
         total_results = 0
         for file_path in files:
-            result_count = self._import_results_from_file(search_id, file_path)
+            result_count = self._import_results_from_file(
+                dataset_id, pharmacy_name, state_code, timestamp, search_meta, file_path
+            )
             total_results += result_count
         
         # Store screenshot metadata using paths from JSON metadata
         for file_path in files:
             self._store_screenshot_from_json_metadata(
-                dataset_id, search_id, file_path, base_dir
+                dataset_id, pharmacy_name, file_path, base_dir
             )
         
-        return search_id
+        return dataset_id  # Return dataset_id instead of search_id
     
-    def _import_results_from_file(self, search_id: int, file_path: Path) -> int:
+    def _import_results_from_file(self, dataset_id: int, pharmacy_name: str, 
+                                 state_code: str, search_ts: datetime, 
+                                 search_meta: dict, file_path: Path) -> int:
         """
-        Import search results from a single JSON file
+        Import search results from a single JSON file to merged search_results table
         
         Args:
-            search_id: Search ID
+            dataset_id: Dataset ID
+            pharmacy_name: Pharmacy name being searched
+            state_code: State code for search
+            search_ts: Search timestamp
+            search_meta: Search metadata
             file_path: Path to JSON file
             
         Returns:
@@ -726,20 +718,25 @@ class StateImporter(BaseImporter):
                 state = address_data.get('state') if isinstance(address_data, dict) else license_data.get('state')
                 zip_code = address_data.get('zip_code') if isinstance(address_data, dict) else license_data.get('zip')
                 
-                # Build result data
+                # Build result data for merged table
+                combined_meta = {**search_meta, 'source_file': file_path.name}
                 result_data = (
-                    search_id,
+                    dataset_id,
+                    pharmacy_name,           # search_name
+                    state_code,              # search_state  
+                    search_ts,               # search_ts
                     license_data.get('license_number'),
                     license_data.get('license_status'),
                     license_data.get('pharmacy_name'),  # license_name in schema
                     street,
                     city,
-                    state,
+                    state,                   # result state (can differ from search_state)
                     zip_code,
                     issue_date,
                     exp_date,
                     result_status,
-                    json.dumps(license_data)  # Store complete license data as raw
+                    json.dumps(combined_meta),  # Combined metadata
+                    json.dumps(license_data)    # Store complete license data as raw
                 )
                 
                 results_data.append(result_data)
@@ -751,15 +748,69 @@ class StateImporter(BaseImporter):
         if not results_data:
             return 0
         
-        # Batch insert results
+        # Batch insert results with ON CONFLICT handling for deduplication
         columns = [
-            'search_id', 'license_number', 'license_status', 'license_name',
+            'dataset_id', 'search_name', 'search_state', 'search_ts',
+            'license_number', 'license_status', 'license_name',
             'address', 'city', 'state', 'zip', 'issue_date', 'expiration_date',
-            'result_status', 'raw'
+            'result_status', 'meta', 'raw'
         ]
         
-        return self.batch_insert('search_results', columns, results_data)
+        return self._batch_insert_with_dedup('search_results', columns, results_data)
     
+    def _batch_insert_with_dedup(self, table_name: str, columns: List[str], 
+                                data: List[tuple]) -> int:
+        """
+        Batch insert with deduplication using ON CONFLICT
+        Keeps record with latest search_ts when conflicts occur
+        """
+        if not data:
+            return 0
+            
+        try:
+            # Build column list and placeholders
+            cols = ', '.join(columns)
+            placeholders = ', '.join(['%s'] * len(columns))
+            
+            # Find search_ts column index for conflict resolution
+            search_ts_idx = columns.index('search_ts')
+            
+            # Build ON CONFLICT clause
+            conflict_sql = f"""
+                INSERT INTO {table_name} ({cols})
+                VALUES ({placeholders})
+                ON CONFLICT (dataset_id, search_state, license_number)
+                DO UPDATE SET
+                    search_name = EXCLUDED.search_name,
+                    search_ts = EXCLUDED.search_ts,
+                    license_status = EXCLUDED.license_status,
+                    license_name = EXCLUDED.license_name,
+                    address = EXCLUDED.address,
+                    city = EXCLUDED.city,
+                    state = EXCLUDED.state,
+                    zip = EXCLUDED.zip,
+                    issue_date = EXCLUDED.issue_date,
+                    expiration_date = EXCLUDED.expiration_date,
+                    result_status = EXCLUDED.result_status,
+                    meta = EXCLUDED.meta,
+                    raw = EXCLUDED.raw
+                WHERE EXCLUDED.search_ts > {table_name}.search_ts
+                   OR ({table_name}.search_ts IS NULL AND EXCLUDED.search_ts IS NOT NULL)
+            """
+            
+            with self.conn.cursor() as cur:
+                cur.executemany(conflict_sql, data)
+                inserted_count = cur.rowcount
+                self.conn.commit()
+                
+                self.logger.debug(f"Batch insert: {inserted_count} rows affected in {table_name}")
+                return inserted_count
+                
+        except Exception as e:
+            self.logger.error(f"Batch insert failed: {str(e)}")
+            self.conn.rollback()
+            return 0
+
     def _parse_date(self, date_str) -> Optional[datetime.date]:
         """Parse date from various formats"""
         if not date_str:
@@ -844,7 +895,7 @@ class StateImporter(BaseImporter):
         except Exception as e:
             self.logger.error(f"Failed to store screenshot metadata for {png_file}: {str(e)}")
 
-    def _store_screenshot_from_json_metadata(self, dataset_id: int, search_id: int,
+    def _store_screenshot_from_json_metadata(self, dataset_id: int, pharmacy_name: str,
                                            json_file: Path, base_dir: Path):
         """Store screenshot metadata using path from JSON metadata"""
         try:
@@ -876,18 +927,17 @@ class StateImporter(BaseImporter):
             pharmacy_name = metadata.get('pharmacy_name', 'Unknown')
             state_code = metadata.get('state', 'Unknown')
             
-            # Insert metadata
+            # Insert metadata (no more search_id foreign key)
             self.execute_statement("""
-                INSERT INTO images (dataset_id, state, search_id, search_name, 
+                INSERT INTO images (dataset_id, state, search_name, 
                                    organized_path, storage_type, file_size)
-                VALUES (%s, %s, %s, %s, %s, %s, %s)
+                VALUES (%s, %s, %s, %s, %s, %s)
                 ON CONFLICT (dataset_id, organized_path) DO UPDATE SET
-                    search_id = EXCLUDED.search_id,
+                    search_name = EXCLUDED.search_name,
                     file_size = EXCLUDED.file_size
             """, (
                 dataset_id,
                 state_code,
-                search_id,
                 pharmacy_name,
                 organized_path,
                 'local',

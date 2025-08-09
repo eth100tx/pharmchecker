@@ -31,35 +31,38 @@ CREATE TABLE IF NOT EXISTS pharmacies (
   created_at      TIMESTAMP NOT NULL DEFAULT now()
 );
 
--- State board searches
-CREATE TABLE IF NOT EXISTS searches (
-  id            SERIAL PRIMARY KEY,
-  dataset_id    INT NOT NULL REFERENCES datasets(id) ON DELETE CASCADE,
-  search_name   TEXT NOT NULL,  -- Exact copy from pharmacies.name
-  search_state  CHAR(2) NOT NULL,
-  search_ts     TIMESTAMP,
-  meta          JSONB
-);
-
--- Search results from state boards
+-- Merged search results from state boards (combines search parameters + results)
 CREATE TABLE IF NOT EXISTS search_results (
   id               SERIAL PRIMARY KEY,
-  search_id        INT NOT NULL REFERENCES searches(id) ON DELETE CASCADE,
+  dataset_id       INT NOT NULL REFERENCES datasets(id) ON DELETE CASCADE,
+  
+  -- Search parameters (formerly in searches table)
+  search_name      TEXT NOT NULL,      -- From pharmacies.name
+  search_state     CHAR(2) NOT NULL,
+  search_ts        TIMESTAMP,
+  
+  -- Result fields
   license_number   TEXT,
   license_status   TEXT,
-  license_name     TEXT,  -- Can vary: "Empower TX", "Empower LLC", etc.
+  license_name     TEXT,              -- Can vary: "Empower TX", "Empower LLC", etc.
   address          TEXT,
   city             TEXT,
-  state            CHAR(2),
+  state            TEXT,               -- State from result (can differ from search_state)
   zip              TEXT,
   issue_date       DATE,
   expiration_date  DATE,
   result_status    TEXT,
-  raw              JSONB,
-  created_at       TIMESTAMP NOT NULL DEFAULT now()
+  
+  -- Metadata
+  meta             JSONB,              -- Combined metadata from search and result
+  raw              JSONB,              -- Raw result data
+  created_at       TIMESTAMP NOT NULL DEFAULT now(),
+  
+  -- Unique constraint to handle deduplication during import
+  CONSTRAINT unique_search_result UNIQUE(dataset_id, search_state, license_number)
 );
 
--- Computed match scores (uses IDs within dataset pairs)
+-- Computed match scores (uses IDs within dataset pairs)  
 CREATE TABLE IF NOT EXISTS match_scores (
   id                    SERIAL PRIMARY KEY,
   states_dataset_id     INT NOT NULL REFERENCES datasets(id) ON DELETE CASCADE,
@@ -89,7 +92,7 @@ CREATE TABLE IF NOT EXISTS validated_overrides (
   license_name     TEXT,
   address          TEXT,
   city             TEXT,
-  state            CHAR(2),
+  state            TEXT,
   zip              TEXT,
   issue_date       DATE,
   expiration_date  DATE,
@@ -110,8 +113,7 @@ CREATE TABLE IF NOT EXISTS images (
   id             SERIAL PRIMARY KEY,
   dataset_id     INT NOT NULL REFERENCES datasets(id) ON DELETE CASCADE,
   state          CHAR(2) NOT NULL,
-  search_id      INT REFERENCES searches(id) ON DELETE SET NULL,
-  search_name    TEXT,  -- Captured for reference even if search deleted
+  search_name    TEXT NOT NULL,  -- Pharmacy name being searched
   organized_path TEXT NOT NULL,  -- "<states_tag>/<STATE>/<search_name_slug>.import_timestamp"
   storage_type   TEXT NOT NULL CHECK (storage_type IN ('local','supabase')),
   file_size      BIGINT,
@@ -136,14 +138,12 @@ CREATE INDEX IF NOT EXISTS ix_pharm_dataset ON pharmacies(dataset_id);
 CREATE INDEX IF NOT EXISTS ix_pharm_name ON pharmacies(name);
 CREATE INDEX IF NOT EXISTS ix_pharm_name_trgm ON pharmacies USING gin (name gin_trgm_ops);
 
--- Searches
-CREATE INDEX IF NOT EXISTS ix_search_dataset ON searches(dataset_id);
-CREATE INDEX IF NOT EXISTS ix_search_name_state ON searches(dataset_id, search_name, search_state, search_ts DESC);
-
--- Search results
-CREATE INDEX IF NOT EXISTS ix_results_search ON search_results(search_id);
+-- Search results (merged table)
+CREATE INDEX IF NOT EXISTS ix_results_dataset ON search_results(dataset_id);
+CREATE INDEX IF NOT EXISTS ix_results_search_name_state ON search_results(dataset_id, search_name, search_state, search_ts DESC);
 CREATE INDEX IF NOT EXISTS ix_results_license ON search_results(license_number);
 CREATE INDEX IF NOT EXISTS ix_results_dates ON search_results(issue_date, expiration_date);
+CREATE INDEX IF NOT EXISTS ix_results_unique_lookup ON search_results(dataset_id, search_state, license_number);
 
 -- Match scores
 CREATE INDEX IF NOT EXISTS ix_scores_composite ON match_scores(
@@ -157,4 +157,4 @@ CREATE INDEX IF NOT EXISTS ix_validated_license ON validated_overrides(state_cod
 
 -- Images
 CREATE INDEX IF NOT EXISTS ix_images_dataset ON images(dataset_id, state);
-CREATE INDEX IF NOT EXISTS ix_images_search ON images(search_id);
+CREATE INDEX IF NOT EXISTS ix_images_search_name ON images(search_name, state);

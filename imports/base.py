@@ -292,14 +292,17 @@ class BaseImporter:
             stats['pharmacies'] = count
             
         elif kind == 'states':
-            search_count = self.execute_one(
-                "SELECT COUNT(*) FROM searches WHERE dataset_id = %s",
+            # Count total results in merged table
+            result_count = self.execute_one(
+                "SELECT COUNT(*) FROM search_results WHERE dataset_id = %s",
                 (dataset_id,)
             )[0]
-            result_count = self.execute_one("""
-                SELECT COUNT(*) FROM search_results sr 
-                JOIN searches s ON sr.search_id = s.id 
-                WHERE s.dataset_id = %s
+            
+            # Count unique searches (by search_name, search_state combination)
+            search_count = self.execute_one("""
+                SELECT COUNT(DISTINCT (search_name, search_state)) 
+                FROM search_results 
+                WHERE dataset_id = %s
             """, (dataset_id,))[0]
             
             stats['searches'] = search_count

@@ -5,11 +5,22 @@ PharmChecker is a lightweight internal tool for verifying pharmacy licenses acro
 ## Features
 
 - **Versioned Datasets**: Import and combine pharmacy, state search, and validation data in any order
-- **Lazy Scoring**: Address match scores computed on-demand when needed  
+- **Optimized Database**: Merged table structure with automatic deduplication
+- **Lazy Scoring**: Address match scores computed on-demand when needed *(in development)*
 - **Multi-User Support**: Multiple users can work with different dataset combinations
-- **Streamlit UI**: Web interface for reviewing results and creating validations
+- **Streamlit UI**: Web interface for reviewing results and creating validations *(in development)*
 - **Screenshot Integration**: Store and display state board search screenshots
 - **Flexible Storage**: Local filesystem or Supabase storage support
+
+## Implementation Status
+
+✅ **COMPLETED**: Core data infrastructure with optimized database schema  
+✅ **COMPLETED**: Import system for pharmacies and state search results  
+✅ **COMPLETED**: Screenshot handling and metadata management  
+✅ **COMPLETED**: Development tools and repository organization  
+
+🚧 **IN PROGRESS**: Address scoring engine (next priority)  
+📋 **PENDING**: Streamlit UI and validated overrides importer
 
 ## Quick Start
 
@@ -24,6 +35,7 @@ PharmChecker is a lightweight internal tool for verifying pharmacy licenses acro
 ```bash
 git clone <your-repo-url>
 cd pharmchecker
+pip install -r requirements.txt
 ```
 
 ### 3. Setup
@@ -40,10 +52,29 @@ The setup script will:
 - Set up data directories
 - Run verification tests
 
-### 4. Run the Application
+### 4. Development Commands
+
+Use the convenient Makefile commands for development:
 
 ```bash
-streamlit run app.py
+# Quick database status check
+make status
+
+# Clean and import test data  
+make clean_states import_test_states
+
+# Full development workflow
+make dev  # Imports pharmacies + both state datasets
+
+# Database management
+make clean_all    # Full reset
+make setup       # Initialize database
+```
+
+### 5. Run the Application (Coming Soon)
+
+```bash
+streamlit run app.py  # UI implementation in progress
 ```
 
 ## Data Import
@@ -69,15 +100,16 @@ with PharmacyImporter(get_db_config()) as importer:
 from imports.states import StateImporter
 
 with StateImporter() as importer:
-    success = importer.import_json(
-        filepath='data/state_searches.json', 
-        tag='2024-01-15',
-        screenshot_dir='data/screenshots',
-        created_by='admin'
+    # Import directory of JSON files with automatic screenshot handling
+    success = importer.import_directory(
+        directory_path='data/states_baseline', 
+        tag='states_baseline',
+        created_by='admin',
+        description='Baseline state search data'
     )
 ```
 
-### Import Validated Overrides
+### Import Validated Overrides (Coming Soon)
 
 ```python
 from imports.validated import ValidatedImporter
@@ -89,6 +121,8 @@ with ValidatedImporter() as importer:
         created_by='admin'
     )
 ```
+
+*Note: ValidatedImporter implementation is pending - deferred until baseline system is operational.*
 
 ## Data Formats
 
@@ -103,31 +137,28 @@ Required columns: `name`, `state_licenses`
 
 ### State Search JSON Format
 
+Individual JSON files per search (e.g., `Belmar_01_parse.json`):
+
 ```json
 {
-  "searches": [
-    {
-      "name": "Empower Pharmacy",
-      "state": "TX", 
-      "timestamp": "2024-01-15T10:30:00",
-      "results": [
-        {
-          "license_number": "12345",
-          "license_status": "Active",
-          "license_name": "Empower Pharmacy of Texas LLC",
-          "address": "123 Main Street",
-          "city": "Houston", 
-          "state": "TX",
-          "zip": "77001",
-          "issue_date": "2020-01-01",
-          "expiration_date": "2025-01-01"
-        }
-      ],
-      "screenshot": "empower_tx_20240115.png"
-    }
-  ]
+  "search_name": "Belmar Pharmacy",
+  "search_state": "FL",
+  "search_ts": "2024-08-05T14:30:22.123Z",
+  "result_status": "results_found",
+  "license_number": "PH9876",
+  "license_status": "Active",  
+  "license_name": "Belmar Compounding Pharmacy",
+  "address": "8280 NORTHLAKE BLVD",
+  "city": "WEST PALM BEACH",
+  "state": "FL",
+  "zip": "33409",
+  "issue_date": "2015-03-01",
+  "expiration_date": "2025-02-28",
+  "screenshot_path": "data/states_baseline/FL/Belmar_01.png"
 }
 ```
+
+For empty results: `Pharmacy_no_results_parse.json` with `"result_status": "no_results_found"`
 
 ### Validation Override CSV Format
 
@@ -156,9 +187,11 @@ Status buckets:
 ### Core Components
 
 1. **PostgreSQL Database** - Stores versioned datasets and computed scores
-2. **Import Scripts** - Load different data types with validation
-3. **Scoring Engine** - Computes address match scores on-demand
-4. **Streamlit UI** - Review interface with authentication
+   - **Optimized Schema**: Merged search_results table eliminates timing conflicts
+   - **Automatic Deduplication**: ON CONFLICT handling for data integrity
+2. **Import Scripts** - Load different data types with validation and error recovery
+3. **Scoring Engine** - Computes address match scores on-demand *(in development)*
+4. **Streamlit UI** - Review interface with authentication *(in development)*
 5. **Storage Layer** - Local filesystem or cloud storage for screenshots
 
 ### Key Design Principles
@@ -194,18 +227,25 @@ STREAMLIT_PORT=8501
 
 ```
 pharmchecker/
-├── imports/           # Data import modules
-│   ├── base.py       # Base importer class
-│   ├── pharmacies.py # Pharmacy CSV importer  
-│   ├── states.py     # State search JSON importer
-│   └── validated.py  # Validation override importer
-├── scoring_plugin.py  # Address matching algorithm
-├── app.py            # Streamlit UI application
-├── config.py         # Configuration management
-├── setup.py          # Database setup script
-├── schema.sql        # Database schema
-├── functions.sql     # Database functions
-└── data/             # Data directory
+├── imports/              # Data import modules
+│   ├── base.py          # Base importer class with batch operations  
+│   ├── pharmacies.py    # Pharmacy CSV importer
+│   ├── states.py        # State search JSON importer (with deduplication)
+│   └── validated.py     # Validation override importer (pending)
+├── scoring_plugin.py     # Address matching algorithm (pending)
+├── app.py               # Streamlit UI application (pending)
+├── config.py            # Configuration management
+├── setup.py             # Database setup script
+├── schema.sql           # Optimized database schema (merged tables)
+├── functions.sql        # Database functions (updated for merged schema)
+├── Makefile             # Development commands
+├── show_status.py       # Database status utility
+├── clean_search_db.py   # Database cleaning utility  
+├── tmp/                 # Temporary files (migration scripts, tests)
+└── data/                # Data directory
+    ├── states_baseline/ # Sample state search data
+    ├── states_baseline2/# Additional sample data  
+    └── pharmacies_new.csv # Sample pharmacy data
 ```
 
 ### Database Functions
