@@ -257,16 +257,31 @@ def render_results_matrix():
         filter_to_loaded = st.checkbox("Show only loaded states", True, 
                                      help="Only show pharmacy-state combinations where search data exists")
     
-    # Get available states from loaded data
+    # Get database manager
     db = get_database_manager()
     
-    with st.spinner("Loading results matrix..."):
-        results_df = db.get_results_matrix(
-            datasets['states'],
-            datasets['pharmacies'], 
-            datasets['validated'],
-            filter_to_loaded_states=filter_to_loaded
-        )
+    # Use new comprehensive approach with session caching
+    cache_key = f"comprehensive_{datasets['states']}_{datasets['pharmacies']}_{datasets.get('validated', 'none')}_{filter_to_loaded}"
+    
+    if cache_key not in st.session_state:
+        with st.spinner("Loading comprehensive results..."):
+            st.session_state[cache_key] = db.get_comprehensive_results(
+                datasets['states'],
+                datasets['pharmacies'], 
+                datasets['validated'],
+                filter_to_loaded_states=filter_to_loaded
+            )
+    
+    # Get full results from cache
+    full_results_df = st.session_state[cache_key]
+    
+    if full_results_df.empty:
+        st.warning("No comprehensive results found for the selected datasets")
+        return
+    
+    # Aggregate for matrix display
+    with st.spinner("Aggregating results for matrix view..."):
+        results_df = db.aggregate_for_matrix(full_results_df)
     
     if results_df.empty:
         st.warning("No results found for the selected datasets")
@@ -341,7 +356,9 @@ def render_results_matrix():
     # Display detailed view below table if a row is selected
     if selected_row is not None:
         st.subheader("Detailed View")
-        display_row_detail_section(selected_row, datasets, debug_mode)
+        # Get detail data from comprehensive results
+        detail_results = db.filter_for_detail(full_results_df, selected_row['pharmacy_name'], selected_row['search_state'])
+        display_row_detail_section(selected_row, datasets, debug_mode, detail_results)
     
     # Export functionality
     st.subheader("Export")

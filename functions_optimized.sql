@@ -1,6 +1,10 @@
 -- PharmChecker Database Functions - Optimized Schema
 -- Updated to work with the actual merged search_results table
 
+-- DEPRECATED: This function is superseded by get_all_results_with_context() 
+-- in functions_comprehensive.sql which provides better performance and maintainability.
+-- This function is kept for backward compatibility but will be removed in a future version.
+
 -- Function to get the results matrix for specific dataset combinations
 CREATE OR REPLACE FUNCTION get_results_matrix(
   p_states_tag TEXT,

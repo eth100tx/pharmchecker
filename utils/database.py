@@ -273,7 +273,14 @@ class DatabaseManager:
                           pharmacies_tag: str, 
                           validated_tag: Optional[str] = None,
                           filter_to_loaded_states: bool = True) -> pd.DataFrame:
-        """Get results matrix using optimized database function with record counts
+        """DEPRECATED: Get results matrix using optimized database function with record counts
+        
+        This method is deprecated in favor of the new comprehensive approach:
+        - Use get_comprehensive_results() to get all data
+        - Use aggregate_for_matrix() to create matrix view
+        - Use filter_for_detail() for detail views
+        
+        This provides better performance for detail views and eliminates multiple database calls.
         
         Args:
             states_tag: States dataset tag
@@ -471,6 +478,252 @@ class DatabaseManager:
         except Exception as e:
             logger.error(f"Failed to get scoring statistics: {e}")
             return {}
+
+    # =====================================================
+    # NEW COMPREHENSIVE RESULTS METHODS
+    # =====================================================
+    
+    def get_comprehensive_results(self, states_tag: str, pharmacies_tag: str, 
+                                validated_tag: Optional[str] = None,
+                                filter_to_loaded_states: bool = True) -> pd.DataFrame:
+        """Get all search results for dataset combination using new comprehensive function
+        
+        Returns complete dataset without aggregation for client-side processing.
+        
+        Args:
+            states_tag: States dataset tag
+            pharmacies_tag: Pharmacies dataset tag  
+            validated_tag: Validated dataset tag (optional)
+            filter_to_loaded_states: If True, only include states with search data
+            
+        Returns:
+            DataFrame with all relevant search results and context
+        """
+        if filter_to_loaded_states:
+            # Only show pharmacy-state combinations where we have search data
+            sql = """
+            SELECT * FROM get_all_results_with_context(%s, %s, %s) 
+            WHERE search_state IN (
+                SELECT DISTINCT search_state 
+                FROM search_results sr
+                JOIN datasets d ON sr.dataset_id = d.id 
+                WHERE d.tag = %s
+            )
+            """
+            params = [states_tag, pharmacies_tag, validated_tag, states_tag]
+        else:
+            # Show all pharmacy license combinations (original behavior)
+            sql = "SELECT * FROM get_all_results_with_context(%s, %s, %s)"
+            params = [states_tag, pharmacies_tag, validated_tag]
+        
+        try:
+            df = self.execute_query(sql, params)
+            
+            if df.empty:
+                logger.warning("No comprehensive results found, using fallback data")
+                return self._get_sample_comprehensive_results()
+            
+            # Add computed fields that were previously done in SQL
+            df = self._add_computed_fields(df)
+            
+            return df
+            
+        except Exception as e:
+            logger.error(f"Failed to get comprehensive results: {e}")
+            if self.allow_fallback:
+                return self._get_sample_comprehensive_results()
+            else:
+                return pd.DataFrame()
+    
+    def aggregate_for_matrix(self, full_df: pd.DataFrame) -> pd.DataFrame:
+        """Client-side aggregation for matrix view from comprehensive results
+        
+        Args:
+            full_df: Complete results DataFrame from get_comprehensive_results()
+            
+        Returns:
+            DataFrame aggregated for matrix display (one row per pharmacy-state)
+        """
+        if full_df.empty:
+            return pd.DataFrame()
+        
+        # Group by pharmacy-state combination
+        groupby_cols = ['pharmacy_id', 'pharmacy_name', 'search_state']
+        
+        # Aggregate function for each column (only include columns that exist)
+        agg_funcs = {}
+        
+        # Best scoring result fields
+        if 'result_id' in full_df.columns:
+            agg_funcs['result_id'] = lambda x: x[x.notna()].iloc[0] if not x[x.notna()].empty else None
+        if 'license_number' in full_df.columns:
+            agg_funcs['license_number'] = lambda x: x[x.notna()].iloc[0] if not x[x.notna()].empty else None
+        if 'license_status' in full_df.columns:
+            agg_funcs['license_status'] = lambda x: x[x.notna()].iloc[0] if not x[x.notna()].empty else None
+        if 'issue_date' in full_df.columns:
+            agg_funcs['issue_date'] = lambda x: x[x.notna()].iloc[0] if not x[x.notna()].empty else None
+        if 'expiration_date' in full_df.columns:
+            agg_funcs['expiration_date'] = lambda x: x[x.notna()].iloc[0] if not x[x.notna()].empty else None
+            
+        # Best scores
+        if 'score_overall' in full_df.columns:
+            agg_funcs['score_overall'] = lambda x: x[x.notna()].max() if not x[x.notna()].empty else None
+        if 'score_street' in full_df.columns:
+            agg_funcs['score_street'] = lambda x: x.iloc[x['score_overall'].idxmax()] if 'score_overall' in x and not x['score_overall'][x['score_overall'].notna()].empty else None
+        if 'score_city_state_zip' in full_df.columns:
+            agg_funcs['score_city_state_zip'] = lambda x: x.iloc[x['score_overall'].idxmax()] if 'score_overall' in x and not x['score_overall'][x['score_overall'].notna()].empty else None
+            
+        # Validation fields
+        if 'override_type' in full_df.columns:
+            agg_funcs['override_type'] = lambda x: x[x.notna()].iloc[0] if not x[x.notna()].empty else None
+        if 'validated_license' in full_df.columns:
+            agg_funcs['validated_license'] = lambda x: x[x.notna()].iloc[0] if not x[x.notna()].empty else None
+            
+        # Latest result for backwards compatibility
+        if 'latest_result_id' in full_df.columns:
+            agg_funcs['latest_result_id'] = lambda x: x[x.notna()].iloc[0] if not x[x.notna()].empty else None
+        
+        # Sort by score to get best result first for aggregation
+        sorted_df = full_df.sort_values(['pharmacy_id', 'search_state', 'score_overall'], 
+                                       na_position='last', ascending=[True, True, False])
+        
+        # Perform aggregation
+        try:
+            matrix_df = sorted_df.groupby(groupby_cols, dropna=False).agg(agg_funcs).reset_index()
+            
+            # Add record counts manually since pandas count doesn't work well with our lambda-heavy approach
+            record_counts = full_df.groupby(['pharmacy_name', 'search_state']).size().reset_index(name='record_count')
+            matrix_df = matrix_df.merge(record_counts, on=['pharmacy_name', 'search_state'], how='left')
+            matrix_df['record_count'] = matrix_df['record_count'].fillna(0).astype(int)
+            
+            # Calculate status buckets after aggregation
+            matrix_df['status_bucket'] = matrix_df.apply(self._calculate_status_bucket, axis=1)
+            
+            # Calculate warnings after aggregation  
+            matrix_df['warnings'] = matrix_df.apply(lambda row: self._calculate_warnings(row, full_df), axis=1)
+            
+            return matrix_df
+            
+        except Exception as e:
+            logger.error(f"Failed to aggregate for matrix: {e}")
+            return pd.DataFrame()
+    
+    def filter_for_detail(self, full_df: pd.DataFrame, pharmacy_name: str, 
+                         search_state: str) -> pd.DataFrame:
+        """Filter comprehensive results for detail view
+        
+        Args:
+            full_df: Complete results DataFrame from get_comprehensive_results()
+            pharmacy_name: Pharmacy name to filter for
+            search_state: State to filter for
+            
+        Returns:
+            DataFrame filtered to specific pharmacy-state combination
+        """
+        if full_df.empty:
+            return pd.DataFrame()
+        
+        # Filter to specific pharmacy-state combination
+        filtered_df = full_df[
+            (full_df['pharmacy_name'] == pharmacy_name) & 
+            (full_df['search_state'] == search_state)
+        ].copy()
+        
+        # Sort by timestamp and score for display
+        filtered_df = filtered_df.sort_values(['search_timestamp', 'score_overall'], 
+                                            na_position='last', ascending=[False, False])
+        
+        return filtered_df
+    
+    def _add_computed_fields(self, df: pd.DataFrame) -> pd.DataFrame:
+        """Add computed fields that were previously calculated in SQL"""
+        if df.empty:
+            return df
+        
+        # Add status bucket calculation
+        df['status_bucket'] = df.apply(self._calculate_status_bucket, axis=1)
+        
+        # Add record counts per pharmacy-state combination
+        df['record_count'] = df.groupby(['pharmacy_name', 'search_state'])['result_id'].transform('count')
+        
+        # Add latest_result_id for backwards compatibility
+        df['latest_result_id'] = df['result_id']
+        
+        return df
+    
+    def _calculate_status_bucket(self, row) -> str:
+        """Calculate status bucket for a result row (Python version of SQL logic)"""
+        if row.get('override_type') == 'empty':
+            return 'no data'
+        elif row.get('override_type') == 'present':
+            score = row.get('score_overall')
+            if pd.isna(score):
+                return 'no data'
+            elif score >= 85:
+                return 'match'
+            elif score >= 60:
+                return 'weak match'
+            else:
+                return 'no match'
+        elif pd.isna(row.get('latest_result_id', row.get('result_id'))):
+            return 'no data'
+        elif pd.isna(row.get('score_overall')):
+            return 'no data'
+        elif row.get('score_overall', 0) >= 85:
+            return 'match'
+        elif row.get('score_overall', 0) >= 60:
+            return 'weak match'
+        else:
+            return 'no match'
+    
+    def _calculate_warnings(self, row, full_df: pd.DataFrame) -> List[str]:
+        """Calculate warnings for a matrix row (simplified version)"""
+        warnings = []
+        
+        # For now, return basic warnings - can be expanded later
+        if row.get('override_type') == 'present' and pd.isna(row.get('result_id')):
+            warnings.append('Validated present but result not found')
+        elif row.get('override_type') == 'empty' and not pd.isna(row.get('result_id')):
+            warnings.append('Validated empty but results now exist')
+        
+        return warnings if warnings else None
+    
+    def _get_sample_comprehensive_results(self) -> pd.DataFrame:
+        """Return sample comprehensive results for development"""
+        return pd.DataFrame({
+            'pharmacy_id': [1, 1, 2, 2, 3, 3],
+            'pharmacy_name': ['Belmar Pharmacy', 'Belmar Pharmacy', 'Beaker Pharmacy', 'Beaker Pharmacy', 'Empower Pharmacy', 'Empower Pharmacy'],
+            'search_state': ['FL', 'PA', 'FL', 'PA', 'FL', 'PA'],
+            'result_id': [101, 102, None, None, 104, None],
+            'search_name': ['Belmar Pharmacy', 'Belmar Pharmacy', None, None, 'Empower Pharmacy', None],
+            'license_number': ['PH123456', 'PA78901', None, None, 'FL555666', None],
+            'license_status': ['Active', 'Active', None, None, 'Active', None],
+            'license_name': ['Belmar Pharmacy', 'Belmar Pharmacy PA', None, None, 'Empower Pharmacy', None],
+            'license_type': ['Pharmacy', 'Pharmacy', None, None, 'Pharmacy', None],
+            'issue_date': ['2020-01-15', '2019-03-20', None, None, '2021-05-10', None],
+            'expiration_date': ['2025-01-15', '2024-03-20', None, None, '2026-05-10', None],
+            'score_overall': [96.5, 87.2, None, None, 66.5, None],
+            'score_street': [98.0, 85.0, None, None, 70.0, None],
+            'score_city_state_zip': [94.0, 92.0, None, None, 60.0, None],
+            'override_type': [None, None, None, None, None, None],
+            'validated_license': [None, None, None, None, None, None],
+            'result_status': ['results_found', 'results_found', None, None, 'results_found', None],
+            'search_timestamp': [pd.Timestamp('2025-01-15 10:30'), pd.Timestamp('2025-01-15 10:45'), None, None, pd.Timestamp('2025-01-15 11:00'), None],
+            'screenshot_path': ['image_cache/sample/belmar_fl.png', 'image_cache/sample/belmar_pa.png', None, None, 'image_cache/sample/empower_fl.png', None],
+            'screenshot_storage_type': ['local', 'local', None, None, 'local', None],
+            'screenshot_file_size': [45821, 52031, None, None, 38402, None],
+            'pharmacy_address': ['123 Main St', '123 Main St', '456 Oak Ave', '456 Oak Ave', '789 Pine Rd', '789 Pine Rd'],
+            'pharmacy_city': ['Tampa', 'Tampa', 'Miami', 'Miami', 'Orlando', 'Orlando'],
+            'pharmacy_state': ['FL', 'FL', 'FL', 'FL', 'FL', 'FL'],
+            'pharmacy_zip': ['33601', '33601', '33101', '33101', '32801', '32801'],
+            'result_address': ['123 Main St', '123 Main Street', None, None, '789 Pine Road', None],
+            'result_city': ['Tampa', 'Tampa', None, None, 'Orlando', None],
+            'result_state': ['FL', 'PA', None, None, 'FL', None],
+            'result_zip': ['33601', '33601', None, None, '32801', None],
+            'pharmacy_dataset_id': [1, 1, 1, 1, 1, 1],
+            'states_dataset_id': [2, 2, 2, 2, 2, 2],
+            'validated_dataset_id': [None, None, None, None, None, None]
+        })
 
 # Global database manager instance
 @st.cache_resource

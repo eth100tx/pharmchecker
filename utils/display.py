@@ -423,7 +423,7 @@ def display_dense_results_table(df: pd.DataFrame, debug_mode: bool) -> Optional[
     
     return None
 
-def display_row_detail_section(selected_row: Dict, datasets: Dict[str, str], debug_mode: bool) -> None:
+def display_row_detail_section(selected_row: Dict, datasets: Dict[str, str], debug_mode: bool, detail_results: pd.DataFrame = None) -> None:
     """Display detailed view section below the table for selected row"""
     
     # Pharmacy information section with search context
@@ -484,12 +484,16 @@ def display_row_detail_section(selected_row: Dict, datasets: Dict[str, str], deb
     # Search Results section
     st.markdown("##### Search Results")
     
-    # Get all search results for this pharmacy/state combination
-    search_results = get_search_results_for_detail(
-        selected_row['pharmacy_name'], 
-        selected_row['search_state'], 
-        datasets.get('states', '')
-    )
+    # Use provided detail results or fall back to database query
+    if detail_results is not None:
+        search_results = detail_results
+    else:
+        # Fall back to legacy database query
+        search_results = get_search_results_for_detail(
+            selected_row['pharmacy_name'], 
+            selected_row['search_state'], 
+            datasets.get('states', '')
+        )
     
     if search_results.empty:
         st.info("No search results available")
@@ -597,10 +601,16 @@ def display_row_detail_section(selected_row: Dict, datasets: Dict[str, str], deb
             
             # Build search result address for comparison
             search_addr_parts = []
-            if result.get('address'): search_addr_parts.append(str(result['address']))
-            if result.get('city'): search_addr_parts.append(str(result['city']))
-            if result.get('state'): search_addr_parts.append(str(result['state']))
-            if result.get('zip'): search_addr_parts.append(str(result['zip']))
+            # Handle both old and new column names for compatibility
+            address = result.get('result_address') or result.get('address')
+            city = result.get('result_city') or result.get('city')
+            state = result.get('result_state') or result.get('state')
+            zip_code = result.get('result_zip') or result.get('zip')
+            
+            if address: search_addr_parts.append(str(address))
+            if city: search_addr_parts.append(str(city))
+            if state: search_addr_parts.append(str(state))
+            if zip_code: search_addr_parts.append(str(zip_code))
             
             search_address = ', '.join(search_addr_parts) if search_addr_parts else 'No Address'
             
@@ -740,10 +750,16 @@ def display_enhanced_search_result_detail(result: pd.Series, pharmacy_info: Dict
         
         # Search result address with bold matching parts
         search_addr_parts = []
-        if result.get('address'): search_addr_parts.append(result['address'])
-        if result.get('city'): search_addr_parts.append(result['city'])
-        if result.get('state'): search_addr_parts.append(result['state'])
-        if result.get('zip'): search_addr_parts.append(result['zip'])
+        # Handle both old and new column names for compatibility
+        address = result.get('result_address') or result.get('address')
+        city = result.get('result_city') or result.get('city')
+        state = result.get('result_state') or result.get('state')
+        zip_code = result.get('result_zip') or result.get('zip')
+        
+        if address: search_addr_parts.append(address)
+        if city: search_addr_parts.append(city)
+        if state: search_addr_parts.append(state)
+        if zip_code: search_addr_parts.append(zip_code)
         
         search_address = ', '.join(search_addr_parts) if search_addr_parts else 'N/A'
         
