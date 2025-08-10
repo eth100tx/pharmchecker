@@ -253,6 +253,40 @@ def execute_query(self, sql: str, params=None):
 - Existing validation display and management
 - Audit trail and reason tracking
 
+## Next Steps - Images Schema Fix
+
+### Current Issue ⚠️
+The `images` table schema only links to `dataset_id` and search metadata, but cannot link to individual `search_results` records. This caused duplicate display issues when joining images in search details.
+
+**Current Workaround**: GUI queries `search_results` without images JOIN to prevent duplicates.
+
+### Required Fixes
+1. **Update Images Table Schema**
+   ```sql
+   ALTER TABLE images ADD COLUMN search_result_id INT REFERENCES search_results(id) ON DELETE CASCADE;
+   CREATE INDEX ix_images_result ON images(search_result_id);
+   ```
+
+2. **Fix State Importer (`imports/states.py`)**
+   - Currently creates one image record per search
+   - Should create image records linked to each individual search result
+   - Update `_store_screenshot()` method to accept `result_id` parameter
+
+3. **Reimport Search Datasets**
+   - Clean existing search data: `make clean_states`
+   - Reimport with fixed schema: `make import_test_states`
+   - Verify image associations work correctly
+
+4. **Update GUI Image Display**
+   - Restore images JOIN in `get_search_results()` query
+   - Add screenshot display to search detail cards
+   - Test that no duplicates occur with proper schema
+
+### Implementation Priority
+- **Priority**: Medium - System works without images currently
+- **Effort**: ~2 hours (schema + importer + testing)
+- **Risk**: Low - Workaround in place, isolated to image display feature
+
 ---
-*Updated: 2025-01-09*
-*Status: ✅ MVP COMPLETED - Ready for Production Integration*
+*Updated: 2025-08-10*
+*Status: ✅ MVP COMPLETED with Real Database Integration - Images Schema Fix Pending*

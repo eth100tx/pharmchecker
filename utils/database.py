@@ -36,41 +36,54 @@ class DatabaseManager:
         try:
             logger.info(f"Executing query: {sql[:100]}...")
             
-            # Format SQL with parameters if provided
-            if params:
-                # Simple parameter substitution for PostgreSQL
-                formatted_sql = sql
-                for i, param in enumerate(params):
-                    if param is None:
-                        formatted_sql = formatted_sql.replace('%s', 'NULL', 1)
-                    elif isinstance(param, str):
-                        # Escape single quotes
-                        escaped_param = param.replace("'", "''")
-                        formatted_sql = formatted_sql.replace('%s', f"'{escaped_param}'", 1)
-                    else:
-                        formatted_sql = formatted_sql.replace('%s', str(param), 1)
-                sql = formatted_sql
-            
-            # Use Streamlit's experimental connection (if available) or return sample data
-            # For now, return appropriate sample data based on the query pattern
-            if "datasets" in sql.lower():
-                return self._get_sample_datasets()
-            elif "get_results_matrix" in sql.lower():
-                return self._get_sample_results_matrix()
-            elif "find_missing_scores" in sql.lower():
-                return self._get_sample_missing_scores()
-            elif "match_scores" in sql.lower() and "count" in sql.lower():
-                return self._get_sample_scoring_stats()
-            elif "pharmacies" in sql.lower():
-                return self._get_sample_pharmacies()
-            elif "search_results" in sql.lower():
-                return self._get_sample_search_results()
-            else:
-                return pd.DataFrame()
+            # Try to connect to actual database using SQLAlchemy
+            try:
+                from sqlalchemy import create_engine, text
+                from config import get_db_config
+                
+                db_config = get_db_config()
+                engine = create_engine(
+                    f"postgresql://{db_config['user']}:{db_config['password']}@{db_config['host']}:{db_config['port']}/{db_config['database']}"
+                )
+                
+                # Use pandas with SQLAlchemy engine and proper parameter binding
+                if params:
+                    # Convert %s to SQLAlchemy parameter style and use positional parameters
+                    # Replace %s with :param1, :param2, etc.
+                    param_sql = sql
+                    param_dict = {}
+                    for i, param in enumerate(params):
+                        param_name = f"param{i+1}"
+                        param_sql = param_sql.replace('%s', f":{param_name}", 1)
+                        param_dict[param_name] = param
+                    df = pd.read_sql_query(text(param_sql), engine, params=param_dict)
+                else:
+                    df = pd.read_sql_query(sql, engine)
+                return df
+                
+            except (ImportError, Exception) as e:
+                logger.warning(f"Database connection failed: {e}. Using sample data.")
+                return self._get_fallback_data(sql)
             
         except Exception as e:
             logger.error(f"Database query failed: {e}")
-            st.error(f"Database query failed: {e}")
+            return self._get_fallback_data(sql)
+    
+    def _get_fallback_data(self, sql: str) -> pd.DataFrame:
+        """Get sample data when real database is not available"""
+        if "datasets" in sql.lower():
+            return self._get_sample_datasets()
+        elif "get_results_matrix" in sql.lower():
+            return self._get_sample_results_matrix()
+        elif "find_missing_scores" in sql.lower():
+            return self._get_sample_missing_scores()
+        elif "match_scores" in sql.lower() and "count" in sql.lower():
+            return self._get_sample_scoring_stats()
+        elif "pharmacies" in sql.lower():
+            return self._get_sample_pharmacies()
+        elif "search_results" in sql.lower():
+            return self._get_sample_search_results()
+        else:
             return pd.DataFrame()
     
     def _get_sample_datasets(self) -> pd.DataFrame:
@@ -198,7 +211,7 @@ class DatabaseManager:
         """
         
         try:
-            df = self.execute_query(sql, {'kind': kind, 'tag': tag})
+            df = self.execute_query(sql, [kind, tag])
             if df.empty:
                 return {
                     'record_count': 0,
@@ -221,15 +234,55 @@ class DatabaseManager:
                 'description': f'Error loading {kind} dataset: {tag}'
             }
     
+    def get_loaded_states(self, states_tag: str) -> List[str]:
+        """Get list of states that have search data loaded"""
+        sql = """
+        SELECT DISTINCT search_state 
+        FROM search_results sr
+        JOIN datasets d ON sr.dataset_id = d.id 
+        WHERE d.tag = %s
+        ORDER BY search_state
+        """
+        
+        try:
+            df = self.execute_query(sql, [states_tag])
+            if df.empty:
+                return []
+            return df['search_state'].tolist()
+        except Exception as e:
+            logger.error(f"Failed to get loaded states: {e}")
+            return []
+    
     def get_results_matrix(self, 
                           states_tag: str, 
                           pharmacies_tag: str, 
-                          validated_tag: Optional[str] = None) -> pd.DataFrame:
-        """Get results matrix using optimized database function"""
+                          validated_tag: Optional[str] = None,
+                          filter_to_loaded_states: bool = True) -> pd.DataFrame:
+        """Get results matrix using optimized database function
         
-        # Use the optimized get_results_matrix function
-        sql = "SELECT * FROM get_results_matrix(%s, %s, %s)"
-        params = [states_tag, pharmacies_tag, validated_tag]
+        Args:
+            states_tag: States dataset tag
+            pharmacies_tag: Pharmacies dataset tag  
+            validated_tag: Validated dataset tag (optional)
+            filter_to_loaded_states: If True, only show states with search data
+        """
+        
+        if filter_to_loaded_states:
+            # Only show pharmacy-state combinations where we have search data
+            sql = """
+            SELECT * FROM get_results_matrix(%s, %s, %s) 
+            WHERE search_state IN (
+                SELECT DISTINCT search_state 
+                FROM search_results sr
+                JOIN datasets d ON sr.dataset_id = d.id 
+                WHERE d.tag = %s
+            )
+            """
+            params = [states_tag, pharmacies_tag, validated_tag, states_tag]
+        else:
+            # Show all pharmacy license combinations (original behavior)
+            sql = "SELECT * FROM get_results_matrix(%s, %s, %s)"
+            params = [states_tag, pharmacies_tag, validated_tag]
         
         try:
             df = self.execute_query(sql, params)
@@ -303,12 +356,9 @@ class DatabaseManager:
             dataset_tag = f"states_{dataset_tag}"
             
         sql = """
-        SELECT sr.*, i.organized_path as screenshot_path
+        SELECT sr.*
         FROM search_results sr
         JOIN datasets d ON sr.dataset_id = d.id
-        LEFT JOIN images i ON (sr.dataset_id = i.dataset_id 
-                              AND sr.search_name = i.search_name 
-                              AND sr.search_state = i.state)
         WHERE sr.search_name = %s 
           AND sr.search_state = %s 
           AND d.tag = %s

@@ -166,6 +166,31 @@ Results are classified into status buckets:
 - **no match**: Score < 60
 - **no data**: No search conducted or no results found
 
+## GUI Results Matrix Filtering ✨
+
+**Important**: The GUI filters results by default to show only meaningful data.
+
+### Filtering Behavior
+- **Filtered (default)**: Only shows pharmacy-state combinations where search data exists in the loaded states dataset
+- **Unfiltered option**: Shows ALL pharmacy license combinations across all states (can be 100+ rows of mostly "no data")
+- **Context Display**: Sidebar shows pharmacy count, loaded states list (e.g., "FL, PA"), and validated count
+
+### Why This Matters
+Without filtering, the results matrix shows every pharmacy × every licensed state combination, resulting in hundreds of mostly-empty "no data" rows. Filtering focuses attention on actionable data where searches were actually conducted.
+
+**Example**: 6 pharmacies with ~25 state licenses each = 150 total combinations, but only FL and PA have search data = 12 meaningful rows to review.
+
+## Images Table Schema Issue (Future Fix Needed)
+
+**Current Issue**: The `images` table only links to `dataset_id` and search metadata, but cannot link to individual `search_results` records. This caused duplicate display issues when joining images.
+
+**Current Workaround**: GUI queries `search_results` without images JOIN to prevent duplicates.
+
+**Proper Fix Needed**:
+1. **Add `search_result_id`** foreign key to images table to link specific images to specific results
+2. **Update state importer** to create image records for each search result, not just each search
+3. **Reimport search datasets** with the fixed schema and importer
+
 ## Address Scoring Algorithm ✅ IMPLEMENTED
 
 The scoring plugin (`scoring_plugin.py`) implements:

@@ -88,12 +88,30 @@ def render_sidebar():
     # Dataset context display
     st.sidebar.subheader("Current Context")
     datasets = st.session_state.selected_datasets
+    db = get_database_manager()
     
     for kind, tag in datasets.items():
         if tag:
+            # Get dataset stats
+            stats = db.get_dataset_stats(kind, tag)
+            record_count = stats.get('record_count', 0)
+            
             st.sidebar.success(f"**{kind.title()}:** {tag}")
+            st.sidebar.caption(f"Records: {record_count}")
+            
+            # For states datasets, show loaded states
+            if kind == 'states' and record_count > 0:
+                loaded_states = db.get_loaded_states(tag)
+                if loaded_states:
+                    if len(loaded_states) <= 6:  # Show state list if small
+                        states_str = ", ".join(loaded_states)
+                        st.sidebar.caption(f"States: {states_str}")
+                    else:
+                        st.sidebar.caption(f"States: {len(loaded_states)} loaded")
+                        
         else:
             st.sidebar.info(f"**{kind.title()}:** Not selected")
+            st.sidebar.caption("Records: 0")
     
     # Validation controls
     if datasets.get('validated') or st.session_state.current_page == 'Results Matrix':
@@ -232,6 +250,13 @@ def render_results_matrix():
     with col2:
         debug_mode = st.checkbox("Debug Mode", False, help="Show technical fields")
     
+    # Filter options
+    st.markdown("---")
+    col1, col2 = st.columns(2)
+    with col1:
+        filter_to_loaded = st.checkbox("Show only loaded states", True, 
+                                     help="Only show pharmacy-state combinations where search data exists")
+    
     # Get available states from loaded data
     db = get_database_manager()
     
@@ -239,7 +264,8 @@ def render_results_matrix():
         results_df = db.get_results_matrix(
             datasets['states'],
             datasets['pharmacies'], 
-            datasets['validated']
+            datasets['validated'],
+            filter_to_loaded_states=filter_to_loaded
         )
     
     if results_df.empty:
@@ -506,10 +532,28 @@ def render_search_details():
             if search_results_df.empty:
                 st.warning(f"No search results found for {pharmacy_name} in {search_state}")
             else:
+                # Debug info
                 st.subheader(f"Search Results ({len(search_results_df)} found)")
+                if st.checkbox("Show Debug Info", False):
+                    st.write("**DataFrame Info:**")
+                    st.write(f"Shape: {search_results_df.shape}")
+                    st.write(f"Columns: {list(search_results_df.columns)}")
+                    st.write("**License Numbers:**")
+                    st.write(search_results_df['license_number'].tolist())
+                    st.write("**Unique License Numbers:**")
+                    st.write(search_results_df['license_number'].unique().tolist())
+                
+                # Remove potential duplicates based on license_number and id
+                search_results_df = search_results_df.drop_duplicates(subset=['id'])
+                st.caption(f"After deduplication: {len(search_results_df)} results")
                 
                 for i, (_, result) in enumerate(search_results_df.iterrows()):
-                    with st.expander(f"Result {i+1} - {result.get('license_number', 'No License')}"): 
+                    # More descriptive expander label
+                    license_num = result.get('license_number', 'No License')
+                    license_name = result.get('license_name', 'Unknown')
+                    result_label = f"Result {i+1}: {license_num} - {license_name}"
+                    
+                    with st.expander(result_label, expanded=False): 
                         col1, col2 = st.columns([2, 1])
                         
                         with col1:

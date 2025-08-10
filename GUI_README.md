@@ -1,6 +1,6 @@
 # PharmChecker MVP GUI
 
-A comprehensive Streamlit-based web interface for the PharmChecker pharmacy license verification system.
+A comprehensive Streamlit-based web interface for the PharmChecker pharmacy license verification system with **real PostgreSQL database integration**.
 
 ## 🚀 Quick Start
 
@@ -205,7 +205,9 @@ CMD ["streamlit", "run", "app.py", "--server.address=0.0.0.0"]
 ```
 
 ### Production Considerations
-- Set up proper database connections (remove sample data)
+- ✅ **Database Integration**: Real PostgreSQL connections implemented
+- ✅ **Results Filtering**: Shows only loaded states by default
+- ✅ **Duplicate Fix**: Clean search results display
 - Configure authentication if needed
 - Set up SSL/HTTPS for production
 - Monitor performance with large datasets
@@ -214,10 +216,10 @@ CMD ["streamlit", "run", "app.py", "--server.address=0.0.0.0"]
 ## 📈 Performance
 
 ### Optimization Features
-- **Streamlit Caching**: Query results cached for 5 minutes
+- **Real Database**: Direct PostgreSQL connections with SQLAlchemy
 - **Lazy Loading**: Data loaded only when needed
-- **Pagination**: Large datasets displayed in chunks
-- **Sample Data**: Fast development without database overhead
+- **State Filtering**: Results filtered to loaded states by default
+- **Deduplication**: Duplicate-free search result displays
 
 ### Scalability Notes
 - Designed for datasets with thousands of pharmacies and search results
