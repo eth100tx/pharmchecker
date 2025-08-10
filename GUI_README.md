@@ -31,10 +31,10 @@ The GUI will be available at `http://localhost:8501`
 - CSV export functionality
 
 ### Scoring Dashboard
-- Real-time scoring statistics and accuracy metrics
-- Missing score identification
-- Batch scoring trigger controls
-- Score distribution analysis
+- **Real-time scoring statistics** and accuracy metrics
+- **Automatic lazy scoring** - scores computed on first access ✨
+- Missing score identification and batch controls
+- Score distribution analysis with performance metrics
 
 ### Pharmacy Details
 - Detailed pharmacy profiles with contact information
@@ -42,14 +42,22 @@ The GUI will be available at `http://localhost:8501`
 - Address and license verification status
 
 ### Search Details
-- In-depth search result analysis
-- Address scoring comparisons
-- Screenshot integration for validation
+- **In-depth search result analysis** with live data
+- **Address scoring comparisons** side-by-side
+- **Automatic screenshot display** from cached images ✨
+- License validation with expiration tracking
 
 ### Validation Manager
 - Manual validation override interface
 - Audit trail and reason tracking
 - Existing validation history display
+
+### Image System ✨
+- **Automatic screenshot display** in search result detail views
+- **Cached image performance** from local `image_cache/` directory  
+- **Smart image sharing** - multiple results share the same cached image
+- **Organized storage** with timestamped filenames for uniqueness
+- **Graceful fallback** when images are unavailable
 
 ## 🏗️ Architecture
 
@@ -76,9 +84,30 @@ The GUI uses a database manager class that abstracts database operations:
 - **Pandas**: Data manipulation and display
 - **Session State**: Maintains context across page navigation
 
+## ⚡ Advanced Features
+
+### Lazy Scoring System ✨
+The GUI automatically triggers scoring when dataset combinations are first accessed:
+
+- **Automatic Detection**: Checks if scoring exists for dataset combination
+- **Background Computation**: Runs scoring engine automatically when needed
+- **Seamless Experience**: Users see fully scored results without manual intervention
+- **Performance Optimization**: Scores computed only once and cached for future use
+
+### Image Caching System ✨
+Efficient screenshot storage and display:
+
+- **Smart Caching**: Images copied to `image_cache/states_baseline/FL/Belmar_01.20250803_1403.png`
+- **Deduplication**: Timestamp-based names prevent duplicate storage
+- **Shared Storage**: Multiple search results share the same cached image file
+- **Database Integration**: Each image record links to specific search result
+- **Automatic Cleanup**: Cache cleaned when search data is reset
+
 ## 🔌 MCP Database Integration
 
-Currently uses sample data for development. To connect to real PharmChecker database:
+**Status**: ✅ **Fully Integrated with Real Database**
+
+The GUI now connects directly to the PharmChecker PostgreSQL database:
 
 ### Option 1: Direct MCP Integration
 Update `utils/database.py` to use actual MCP tools:

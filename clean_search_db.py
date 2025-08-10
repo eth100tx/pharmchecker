@@ -3,6 +3,7 @@
 Clean search database - removes all search-related data while preserving pharmacies
 """
 import os
+import shutil
 from pathlib import Path
 from dotenv import load_dotenv
 import psycopg2
@@ -29,12 +30,9 @@ def clean_search_data():
         conn = get_db_connection()
         
         with conn.cursor() as cur:
-            # Check what we have before cleaning
+            # Check what we have before cleaning (using optimized schema)
             cur.execute("SELECT COUNT(*) FROM search_results")
             results_count = cur.fetchone()[0]
-            
-            cur.execute("SELECT COUNT(*) FROM searches")
-            searches_count = cur.fetchone()[0]
             
             cur.execute("SELECT COUNT(*) FROM images")
             images_count = cur.fetchone()[0]
@@ -46,25 +44,19 @@ def clean_search_data():
             pharmacy_count = cur.fetchone()[0]
             
             print(f"Before cleaning:")
-            print(f"  - Search results: {results_count}")
-            print(f"  - Searches: {searches_count}")
+            print(f"  - Search results: {results_count} (merged table)")
             print(f"  - Images: {images_count}")
             print(f"  - State datasets: {state_datasets_count}")
             print(f"  - Pharmacies: {pharmacy_count} (will be preserved)")
             
-            if results_count == 0 and searches_count == 0 and images_count == 0:
+            if results_count == 0 and images_count == 0:
                 print("✅ Database is already clean!")
                 return
             
-            # Delete in proper order to respect foreign key constraints
+            # Delete in proper order to respect foreign key constraints (optimized schema)
             print("\n🗑️ Deleting search data...")
             
-            # Delete search results first (references searches)
-            cur.execute("DELETE FROM search_results")
-            deleted_results = cur.rowcount
-            print(f"  - Deleted {deleted_results} search results")
-            
-            # Delete match scores (if any exist)
+            # Delete match scores first (references search_results)
             cur.execute("DELETE FROM match_scores")
             deleted_scores = cur.rowcount
             print(f"  - Deleted {deleted_scores} match scores")
@@ -74,15 +66,15 @@ def clean_search_data():
             deleted_overrides = cur.rowcount
             print(f"  - Deleted {deleted_overrides} validated overrides")
             
-            # Delete images
+            # Delete images (may reference search_results)
             cur.execute("DELETE FROM images")
             deleted_images = cur.rowcount
             print(f"  - Deleted {deleted_images} image records")
             
-            # Delete searches
-            cur.execute("DELETE FROM searches")
-            deleted_searches = cur.rowcount
-            print(f"  - Deleted {deleted_searches} searches")
+            # Delete search results from merged table
+            cur.execute("DELETE FROM search_results")
+            deleted_results = cur.rowcount
+            print(f"  - Deleted {deleted_results} search results")
             
             # Delete state datasets (but preserve pharmacy datasets)
             cur.execute("DELETE FROM datasets WHERE kind = 'states'")
@@ -92,7 +84,22 @@ def clean_search_data():
             # Commit all changes
             conn.commit()
             
-            print(f"\n✅ Database cleaned successfully!")
+            # Clean image cache directory
+            print("\n🗑️ Cleaning image cache...")
+            cache_dir = Path('image_cache')
+            if cache_dir.exists():
+                # Count files before deletion
+                cache_files = list(cache_dir.rglob('*'))
+                cache_file_count = len([f for f in cache_files if f.is_file()])
+                
+                # Remove entire cache directory
+                shutil.rmtree(cache_dir)
+                print(f"  - Deleted {cache_file_count} cached image files")
+                print(f"  - Removed image_cache directory")
+            else:
+                print("  - No image cache directory found")
+
+            print(f"\n✅ Database and image cache cleaned successfully!")
             print(f"   Pharmacy data preserved: {pharmacy_count} pharmacies remain")
             
     except Exception as e:
@@ -113,7 +120,7 @@ def main():
     print("=" * 40)
     
     # Confirm before cleaning
-    response = input("This will delete ALL search data (searches, results, images). Continue? (y/N): ")
+    response = input("This will delete ALL search data (search results, images, image cache). Continue? (y/N): ")
     if response.lower() != 'y':
         print("Cleaning cancelled.")
         return

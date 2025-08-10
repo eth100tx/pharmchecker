@@ -319,7 +319,8 @@ def display_dense_results_table(df: pd.DataFrame, debug_mode: bool) -> Optional[
     for (pharmacy_name, state), group in df.groupby(['pharmacy_name', 'search_state']):
         # Get the best result (highest score or first if no scores)
         if 'score_overall' in group.columns:
-            best_row = group.loc[group['score_overall'].fillna(-1).idxmax()]
+            scores_filled = group['score_overall'].fillna(-1).infer_objects(copy=False)
+            best_row = group.loc[scores_filled.idxmax()]
         else:
             best_row = group.iloc[0]
         
@@ -424,14 +425,21 @@ def display_row_detail_section(selected_row: Dict, datasets: Dict[str, str], deb
             
             # Build comprehensive license info for title
             license_parts = []
-            if result.get('license_number', 'No License') != 'No License':
-                license_parts.append(result['license_number'])
-            if result.get('license_name'):
-                license_parts.append(result['license_name'])
-            if result.get('license_status'):
-                license_parts.append(result['license_status'])
-            if result.get('license_type'):
-                license_parts.append(f"({result['license_type']})")
+            license_number = result.get('license_number')
+            if license_number and license_number != 'No License' and str(license_number).strip():
+                license_parts.append(str(license_number))
+            
+            license_name = result.get('license_name')
+            if license_name and str(license_name).strip():
+                license_parts.append(str(license_name))
+                
+            license_status = result.get('license_status')
+            if license_status and str(license_status).strip():
+                license_parts.append(str(license_status))
+                
+            license_type = result.get('license_type')
+            if license_type and str(license_type).strip():
+                license_parts.append(f"({str(license_type)})")
             
             license_info = ' - '.join(license_parts) if license_parts else 'No License'
             

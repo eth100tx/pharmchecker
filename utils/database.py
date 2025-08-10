@@ -162,7 +162,9 @@ class DatabaseManager:
             'issue_date': ['2020-01-15', '2019-03-20', '2021-05-10'],
             'expiration_date': ['2025-01-15', '2024-03-20', '2026-05-10'],
             'result_status': ['results_found', 'results_found', 'results_found'],
-            'screenshot_path': ['data/screenshots/belmar_fl.png', 'data/screenshots/belmar_pa.png', 'data/screenshots/empower_fl.png']
+            'screenshot_path': ['image_cache/baseline/FL/belmar_fl.202501_1045.png', 'image_cache/baseline/PA/belmar_pa.202501_1045.png', 'image_cache/baseline/FL/empower_fl.202501_1045.png'],
+            'screenshot_storage_type': ['local', 'local', 'local'],
+            'screenshot_file_size': [45821, 52031, 38402]
         })
     
     def get_datasets(self) -> Dict[str, List[str]]:
@@ -350,15 +352,23 @@ class DatabaseManager:
             return {}
     
     def get_search_results(self, pharmacy_name: str, state: str, dataset_tag: str) -> pd.DataFrame:
-        """Get search results for a specific pharmacy and state"""
+        """Get search results for a specific pharmacy and state with image data"""
         # Handle dataset tag variations - if just "baseline", try "states_baseline" 
         if dataset_tag and not dataset_tag.startswith('states_'):
             dataset_tag = f"states_{dataset_tag}"
             
         sql = """
-        SELECT sr.*
+        SELECT sr.*, 
+               CASE 
+                   WHEN img.organized_path IS NOT NULL 
+                   THEN 'image_cache/' || img.organized_path 
+                   ELSE NULL 
+               END as screenshot_path,
+               img.storage_type as screenshot_storage_type,
+               img.file_size as screenshot_file_size
         FROM search_results sr
         JOIN datasets d ON sr.dataset_id = d.id
+        LEFT JOIN images img ON img.search_result_id = sr.id
         WHERE sr.search_name = %s 
           AND sr.search_state = %s 
           AND d.tag = %s

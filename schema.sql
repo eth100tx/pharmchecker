@@ -111,15 +111,16 @@ CREATE TABLE IF NOT EXISTS validated_overrides (
 
 -- Screenshot/image storage metadata
 CREATE TABLE IF NOT EXISTS images (
-  id             SERIAL PRIMARY KEY,
-  dataset_id     INT NOT NULL REFERENCES datasets(id) ON DELETE CASCADE,
-  state          CHAR(2) NOT NULL,
-  search_name    TEXT NOT NULL,  -- Pharmacy name being searched
-  organized_path TEXT NOT NULL,  -- "<states_tag>/<STATE>/<search_name_slug>.import_timestamp"
-  storage_type   TEXT NOT NULL CHECK (storage_type IN ('local','supabase')),
-  file_size      BIGINT,
-  created_at     TIMESTAMP NOT NULL DEFAULT now(),
-  UNIQUE(dataset_id, organized_path)
+  id               SERIAL PRIMARY KEY,
+  dataset_id       INT NOT NULL REFERENCES datasets(id) ON DELETE CASCADE,
+  search_result_id INT REFERENCES search_results(id) ON DELETE CASCADE,
+  state            CHAR(2) NOT NULL,
+  search_name      TEXT NOT NULL,  -- Pharmacy name being searched
+  organized_path   TEXT NOT NULL,  -- "<states_tag>/<STATE>/<search_name_slug>.import_timestamp"
+  storage_type     TEXT NOT NULL CHECK (storage_type IN ('local','supabase')),
+  file_size        BIGINT,
+  created_at       TIMESTAMP NOT NULL DEFAULT now(),
+  UNIQUE(dataset_id, organized_path, search_result_id)
 );
 
 -- User allowlist
@@ -159,3 +160,4 @@ CREATE INDEX IF NOT EXISTS ix_validated_license ON validated_overrides(state_cod
 -- Images
 CREATE INDEX IF NOT EXISTS ix_images_dataset ON images(dataset_id, state);
 CREATE INDEX IF NOT EXISTS ix_images_search_name ON images(search_name, state);
+CREATE INDEX IF NOT EXISTS ix_images_result ON images(search_result_id);

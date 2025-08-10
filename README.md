@@ -71,11 +71,11 @@ Use the convenient Makefile commands for development:
 # Quick database status check
 make status
 
-# Clean and import test data  
+# Clean and import test data (with image caching)
 make clean_states import_test_states
 
-# Full development workflow
-make dev  # Imports pharmacies + both state datasets
+# Full development workflow  
+make dev  # Imports pharmacies + both state datasets + caches images
 
 # Database management
 make clean_all    # Full reset
@@ -236,13 +236,36 @@ Empower Pharmacy,TX,12345,present,Verified active license,admin
 MedPoint Compounding,FL,,empty,No FL license found,admin
 ```
 
+## Image System ✨
+
+PharmChecker automatically handles screenshot storage and display with an optimized caching system:
+
+### Image Caching Architecture
+- **Organized Storage**: `image_cache/states_baseline/FL/Belmar_01.20250803_1403.png`
+- **Timestamped Filenames**: Ensure uniqueness and prevent overwrites
+- **Smart Deduplication**: Multiple search results share the same cached image file
+- **1:1:1 Relationship**: Each search result links to exactly one image record and cached file
+
+### Storage Efficiency
+- **No Duplicates**: Timestamp-based names eliminate redundant storage
+- **Shared Images**: Multiple search results from the same file share one cached image
+- **Cloud Ready**: Organized paths support Supabase Storage upload
+- **Automatic Cleanup**: `make clean_states` removes both database records and cached files
+
+### Image Display
+- **Automatic Integration**: Screenshots appear in search result detail views
+- **Cached Performance**: Images served from local `image_cache/` directory
+- **Fallback Handling**: Graceful degradation when images are unavailable
+- **Full Resolution**: Original screenshot quality maintained
+
 ## Scoring System ✅
 
-PharmChecker uses advanced address matching to score how well state board results match pharmacy records:
+PharmChecker uses advanced address matching with **automatic lazy scoring**:
 
 - **Street Score (70% weight)**: Fuzzy matching using RapidFuzz with abbreviation normalization
 - **City/State/ZIP Score (30% weight)**: Exact matching of location components  
 - **Overall Score**: Weighted combination, scaled 0-100
+- **Lazy Scoring**: Automatically triggered when dataset combinations are first accessed ✨
 
 ### Address Normalization
 - Street types: St → Street, Ave → Avenue, Blvd → Boulevard
@@ -372,9 +395,10 @@ The MVP GUI provides comprehensive functionality through an intuitive web interf
 
 ### Detail Views
 - **Pharmacy Profiles**: Complete information with state-by-state breakdown
-- **Search Results**: Individual search details with screenshots
+- **Search Results**: Individual search details with **live screenshots** ✨
 - **Address Comparisons**: Side-by-side scoring analysis
 - **License Validation**: Current status and expiration tracking
+- **Image Display**: Automatic screenshot display from cached images
 
 ### Validation Manager
 - **Manual Overrides**: Create present/empty validations
@@ -384,7 +408,8 @@ The MVP GUI provides comprehensive functionality through an intuitive web interf
 
 ### Technical Features
 - **MCP Integration**: Ready for production database connection
-- **Sample Data**: Working interface without database dependency
+- **Lazy Scoring**: Automatic scoring when dataset combinations are first accessed ✨
+- **Image Caching**: Efficient screenshot storage with automatic deduplication
 - **Error Handling**: Comprehensive user feedback
 - **Performance**: Caching and optimization for large datasets
 

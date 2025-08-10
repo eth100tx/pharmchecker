@@ -3,6 +3,7 @@ State search results importer for PharmChecker
 Imports state board search results from JSON files with optional screenshot handling
 """
 import json
+import shutil
 from datetime import datetime
 from pathlib import Path
 from typing import Optional, Dict, Any, List
@@ -187,34 +188,23 @@ class StateImporter(BaseImporter):
         # Get metadata
         meta = search_data.get('meta', {})
         
-        # Insert search record
-        with self.conn.cursor() as cur:
-            cur.execute("""
-                INSERT INTO searches (dataset_id, search_name, search_state, search_ts, meta)
-                VALUES (%s, %s, %s, %s, %s)
-                RETURNING id
-            """, (
-                dataset_id,
-                name,
-                state,
-                timestamp,
-                json.dumps(meta)
-            ))
-            search_id = cur.fetchone()[0]
-            self.conn.commit()
-        
-        # Import results for this search
+        # Import results directly to merged search_results table
         results = search_data.get('results', [])
-        if results:
-            self._import_search_results(search_id, results)
+        result_ids = []
         
-        # Handle screenshot if present
-        if screenshot_path and 'screenshot' in search_data:
-            self._store_screenshot_metadata(
-                dataset_id, search_id, search_data, screenshot_path, tag
+        if results:
+            result_ids = self._import_search_results_merged(
+                dataset_id, name, state, timestamp, meta, results
             )
         
-        return search_id
+        # Handle screenshot if present - now store for each result
+        if screenshot_path and 'screenshot' in search_data and result_ids:
+            for result_id in result_ids:
+                self._store_screenshot_metadata_linked(
+                    dataset_id, result_id, search_data, screenshot_path, tag
+                )
+        
+        return dataset_id  # Return dataset_id since we no longer have search_id
     
     def _import_search_results(self, search_id: int, results: List[Dict[str, Any]]) -> int:
         """
@@ -287,6 +277,216 @@ class StateImporter(BaseImporter):
         ]
         
         return self.batch_insert('search_results', columns, results_data)
+    
+    def _import_search_results_merged(self, dataset_id: int, search_name: str, search_state: str,
+                                     search_ts: datetime, search_meta: dict, 
+                                     results: List[Dict[str, Any]]) -> List[int]:
+        """
+        Import search results to merged search_results table
+        
+        Args:
+            dataset_id: Dataset ID
+            search_name: Pharmacy name being searched
+            search_state: State code for search
+            search_ts: Search timestamp
+            search_meta: Search metadata
+            results: List of result dictionaries
+            
+        Returns:
+            List of result IDs created
+        """
+        if not results:
+            return []
+        
+        results_data = []
+        
+        for result_idx, result in enumerate(results):
+            try:
+                # Parse dates
+                issue_date = None
+                exp_date = None
+                
+                if 'issue_date' in result and result['issue_date']:
+                    try:
+                        issue_date = datetime.strptime(result['issue_date'], '%Y-%m-%d').date()
+                    except ValueError:
+                        self.logger.warning(
+                            f"Result {result_idx}: Invalid issue_date format: {result['issue_date']}"
+                        )
+                
+                if 'expiration_date' in result and result['expiration_date']:
+                    try:
+                        exp_date = datetime.strptime(result['expiration_date'], '%Y-%m-%d').date()
+                    except ValueError:
+                        self.logger.warning(
+                            f"Result {result_idx}: Invalid expiration_date format: {result['expiration_date']}"
+                        )
+                
+                # Build result data for merged table
+                result_data = (
+                    dataset_id,
+                    search_name,
+                    search_state,
+                    search_ts,
+                    result.get('license_number'),
+                    result.get('license_status'),
+                    result.get('license_name'),
+                    result.get('license_type'),
+                    result.get('address'),
+                    result.get('city'),
+                    result.get('state'),
+                    result.get('zip'),
+                    issue_date,
+                    exp_date,
+                    result.get('result_status'),
+                    json.dumps(search_meta),  # Combined metadata
+                    json.dumps(result)  # Store complete result as raw data
+                )
+                
+                results_data.append(result_data)
+                
+            except Exception as e:
+                self.logger.warning(f"Result {result_idx} skipped: {str(e)}")
+                continue
+        
+        if not results_data:
+            return []
+        
+        # Insert results and get IDs back
+        columns = [
+            'dataset_id', 'search_name', 'search_state', 'search_ts',
+            'license_number', 'license_status', 'license_name', 'license_type',
+            'address', 'city', 'state', 'zip', 'issue_date', 'expiration_date',
+            'result_status', 'meta', 'raw'
+        ]
+        
+        return self._batch_insert_returning_ids('search_results', columns, results_data)
+    
+    def _batch_insert_returning_ids(self, table_name: str, columns: List[str], 
+                                   data: List[tuple]) -> List[int]:
+        """
+        Batch insert and return the IDs of inserted records
+        
+        Args:
+            table_name: Name of table to insert into
+            columns: List of column names
+            data: List of tuples with data to insert
+            
+        Returns:
+            List of inserted record IDs
+        """
+        if not data:
+            return []
+            
+        try:
+            # Build column list and placeholders
+            cols = ', '.join(columns)
+            placeholders = ', '.join(['%s'] * len(columns))
+            
+            sql = f"""
+                INSERT INTO {table_name} ({cols})
+                VALUES ({placeholders})
+                RETURNING id
+            """
+            
+            result_ids = []
+            with self.conn.cursor() as cur:
+                for row_data in data:
+                    cur.execute(sql, row_data)
+                    result_id = cur.fetchone()[0]
+                    result_ids.append(result_id)
+                self.conn.commit()
+                
+                self.logger.debug(f"Batch insert: {len(result_ids)} rows inserted into {table_name}")
+                return result_ids
+                
+        except Exception as e:
+            self.logger.error(f"Batch insert with returning IDs failed: {str(e)}")
+            self.conn.rollback()
+            return []
+    
+    def _store_screenshot_metadata_linked(self, dataset_id: int, result_id: int,
+                                        search_data: Dict[str, Any], screenshot_path: Path, 
+                                        tag: str):
+        """
+        Store screenshot metadata linked to specific search result with image caching
+        
+        Args:
+            dataset_id: Dataset ID
+            result_id: Search result ID to link to
+            search_data: Search data containing screenshot info
+            screenshot_path: Directory containing screenshots
+            tag: Dataset tag for organizing paths
+        """
+        try:
+            screenshot_filename = search_data['screenshot']
+            screenshot_file = screenshot_path / screenshot_filename
+            
+            # Check if original file exists
+            if not screenshot_file.exists():
+                self.logger.warning(f"Screenshot file not found: {screenshot_file}")
+                return
+            
+            # Generate organized cache path with timestamp
+            search_name_slug = slugify(search_data['name'])
+            timestamp = search_data.get('timestamp', datetime.now())
+            
+            # Format timestamp for filename (down to minute precision)
+            if isinstance(timestamp, str):
+                try:
+                    timestamp = datetime.fromisoformat(timestamp.replace('Z', '+00:00'))
+                except ValueError:
+                    timestamp = datetime.now()
+                    
+            timestamp_str = timestamp.strftime('%Y%m%d_%H%M')
+            
+            # Create organized path: tag/STATE/original_filename.timestamp.ext
+            original_stem = screenshot_file.stem  # filename without extension
+            original_ext = screenshot_file.suffix  # .png
+            cached_filename = f"{original_stem}.{timestamp_str}{original_ext}"
+            organized_path = f"{tag}/{search_data['state']}/{cached_filename}"
+            
+            # Copy to image cache directory
+            cache_dir = Path('image_cache')
+            cache_file_path = cache_dir / organized_path
+            
+            # Create directories if they don't exist
+            cache_file_path.parent.mkdir(parents=True, exist_ok=True)
+            
+            # Copy file to cache if not already there
+            if not cache_file_path.exists():
+                shutil.copy2(screenshot_file, cache_file_path)
+                self.logger.info(f"Copied screenshot to cache: {cache_file_path}")
+            
+            # Get file size from cached file
+            file_size = cache_file_path.stat().st_size
+            
+            # Store organized path (relative to image_cache) in database
+            # This allows the GUI to find images at image_cache/{organized_path}
+            
+            # Insert metadata with search_result_id link
+            self.execute_statement("""
+                INSERT INTO images (dataset_id, search_result_id, state, search_name, 
+                                   organized_path, storage_type, file_size)
+                VALUES (%s, %s, %s, %s, %s, %s, %s)
+                ON CONFLICT (dataset_id, organized_path) DO UPDATE SET
+                    search_result_id = EXCLUDED.search_result_id,
+                    search_name = EXCLUDED.search_name,
+                    file_size = EXCLUDED.file_size
+            """, (
+                dataset_id,
+                result_id,
+                search_data['state'],
+                search_data['name'],
+                organized_path,
+                'local',  # TODO: Support 'supabase' storage type
+                file_size
+            ))
+            
+            self.logger.info(f"Screenshot cached and linked: {organized_path} -> result_id {result_id}")
+            
+        except Exception as e:
+            self.logger.error(f"Failed to store screenshot metadata: {str(e)}")
     
     def _store_screenshot_metadata(self, dataset_id: int, search_id: int, 
                                  search_data: Dict[str, Any], screenshot_path: Path,
@@ -655,18 +855,19 @@ class StateImporter(BaseImporter):
         }
         
         # Import results from all files directly to search_results table
+        # Each file gets its own results and screenshot links
         total_results = 0
         for file_path in files:
-            result_count = self._import_results_from_file(
+            result_ids = self._import_results_from_file_with_ids(
                 dataset_id, pharmacy_name, state_code, timestamp, search_meta, file_path
             )
-            total_results += result_count
-        
-        # Store screenshot metadata using paths from JSON metadata
-        for file_path in files:
-            self._store_screenshot_from_json_metadata(
-                dataset_id, pharmacy_name, file_path, base_dir
-            )
+            total_results += len(result_ids)
+            
+            # Link screenshot only to results from THIS specific file
+            if result_ids:
+                self._store_screenshot_from_json_metadata_linked(
+                    dataset_id, file_path, base_dir, result_ids
+                )
         
         return dataset_id  # Return dataset_id instead of search_id
     
@@ -758,6 +959,94 @@ class StateImporter(BaseImporter):
         ]
         
         return self._batch_insert_with_dedup('search_results', columns, results_data)
+    
+    def _import_results_from_file_with_ids(self, dataset_id: int, pharmacy_name: str, 
+                                          state_code: str, search_ts: datetime, 
+                                          search_meta: dict, file_path: Path) -> List[int]:
+        """
+        Import search results from a single JSON file to merged search_results table, returning IDs
+        
+        Args:
+            dataset_id: Dataset ID
+            pharmacy_name: Pharmacy name being searched
+            state_code: State code for search
+            search_ts: Search timestamp
+            search_meta: Search metadata
+            file_path: Path to JSON file
+            
+        Returns:
+            List of result IDs created
+        """
+        try:
+            with open(file_path, 'r', encoding='utf-8') as f:
+                data = json.load(f)
+        except Exception as e:
+            self.logger.error(f"Failed to read {file_path}: {e}")
+            return []
+        
+        search_result = data.get('search_result', {})
+        licenses = search_result.get('licenses', [])
+        result_status = search_result.get('result_status', 'unknown')
+        
+        if not licenses:
+            self.logger.debug(f"No licenses found in {file_path.name}")
+            return []
+        
+        results_data = []
+        
+        for license_idx, license_data in enumerate(licenses):
+            try:
+                # Parse dates from various possible formats
+                issue_date = self._parse_date(license_data.get('issue_date'))
+                exp_date = self._parse_date(license_data.get('expiration_date'))
+                
+                # Extract address components (search address)
+                address_data = license_data.get('address', {})
+                street = address_data.get('street') if isinstance(address_data, dict) else license_data.get('address')
+                city = address_data.get('city') if isinstance(address_data, dict) else license_data.get('city')
+                state = address_data.get('state') if isinstance(address_data, dict) else license_data.get('state')
+                zip_code = address_data.get('zip_code') if isinstance(address_data, dict) else license_data.get('zip')
+                
+                # Build result data for merged table
+                combined_meta = {**search_meta, 'source_file': file_path.name}
+                result_data = (
+                    dataset_id,
+                    pharmacy_name,           # search_name
+                    state_code,              # search_state  
+                    search_ts,               # search_ts
+                    license_data.get('license_number'),
+                    license_data.get('license_status'),
+                    license_data.get('pharmacy_name'),  # license_name in schema
+                    license_data.get('license_type'),   # license_type from JSON
+                    street,                  # address
+                    city,
+                    state,                   # result state (can differ from search_state)
+                    zip_code,
+                    issue_date,
+                    exp_date,
+                    result_status,
+                    json.dumps(combined_meta),  # Combined metadata
+                    json.dumps(license_data)    # Store complete license data as raw
+                )
+                
+                results_data.append(result_data)
+                
+            except Exception as e:
+                self.logger.warning(f"License {license_idx} in {file_path.name} skipped: {str(e)}")
+                continue
+        
+        if not results_data:
+            return []
+        
+        # Insert results and return IDs
+        columns = [
+            'dataset_id', 'search_name', 'search_state', 'search_ts',
+            'license_number', 'license_status', 'license_name', 'license_type',
+            'address', 'city', 'state', 'zip', 'issue_date', 'expiration_date',
+            'result_status', 'meta', 'raw'
+        ]
+        
+        return self._batch_insert_returning_ids('search_results', columns, results_data)
     
     def _batch_insert_with_dedup(self, table_name: str, columns: List[str], 
                                 data: List[tuple]) -> int:
@@ -946,6 +1235,94 @@ class StateImporter(BaseImporter):
             ))
             
             self.logger.debug(f"Screenshot metadata stored: {organized_path}")
+            
+        except Exception as e:
+            self.logger.error(f"Failed to store screenshot metadata from {json_file}: {str(e)}")
+    
+    def _store_screenshot_from_json_metadata_linked(self, dataset_id: int, json_file: Path,
+                                                   base_dir: Path, result_ids: List[int]):
+        """Store screenshot metadata linked to specific search results with image caching"""
+        try:
+            # Read JSON to get screenshot path from metadata
+            with open(json_file, 'r', encoding='utf-8') as f:
+                data = json.load(f)
+            
+            metadata = data.get('metadata', {})
+            source_image_file = metadata.get('source_image_file')
+            
+            if not source_image_file:
+                self.logger.debug(f"No source_image_file in {json_file.name}")
+                return
+            
+            # Convert to Path and check if file exists
+            screenshot_file = Path(source_image_file)
+            if not screenshot_file.exists():
+                self.logger.warning(f"Screenshot file not found: {screenshot_file}")
+                return
+            
+            # Extract data from JSON metadata
+            pharmacy_name = metadata.get('pharmacy_name', 'Unknown')
+            state_code = metadata.get('state', 'Unknown')
+            search_timestamp = metadata.get('search_timestamp')
+            
+            # Parse timestamp for cache filename
+            timestamp = datetime.now()
+            if search_timestamp:
+                try:
+                    timestamp = datetime.fromisoformat(search_timestamp.replace('Z', '+00:00'))
+                except ValueError:
+                    self.logger.warning(f"Invalid timestamp in {json_file.name}: {search_timestamp}")
+            
+            # Generate organized cache path with proper timestamp
+            timestamp_str = timestamp.strftime('%Y%m%d_%H%M')
+            
+            # Create organized path: tag/STATE/original_filename.timestamp.ext
+            original_stem = screenshot_file.stem  # filename without extension
+            original_ext = screenshot_file.suffix  # .png
+            cached_filename = f"{original_stem}.{timestamp_str}{original_ext}"
+            organized_path = f"{base_dir.name}/{state_code}/{cached_filename}"
+            
+            # Copy to image cache directory
+            cache_dir = Path('image_cache')
+            cache_file_path = cache_dir / organized_path
+            
+            # Create directories if they don't exist
+            cache_file_path.parent.mkdir(parents=True, exist_ok=True)
+            
+            # Copy file to cache if not already there
+            if not cache_file_path.exists():
+                shutil.copy2(screenshot_file, cache_file_path)
+                self.logger.info(f"Copied screenshot to cache: {cache_file_path}")
+            
+            # Get file size from cached file
+            file_size = cache_file_path.stat().st_size
+            
+            # Store screenshot metadata linked to each result ID from this file
+            # All results share the same cached image file (no duplicates)
+            for result_id in result_ids:
+                try:
+                    # Insert metadata with search_result_id foreign key
+                    # All results from the same file share the same organized_path
+                    self.execute_statement("""
+                        INSERT INTO images (dataset_id, search_result_id, state, search_name, 
+                                           organized_path, storage_type, file_size)
+                        VALUES (%s, %s, %s, %s, %s, %s, %s)
+                        ON CONFLICT (dataset_id, organized_path, search_result_id) DO NOTHING
+                    """, (
+                        dataset_id,
+                        result_id,
+                        state_code,
+                        pharmacy_name,
+                        organized_path,  # Same path for all results from this file
+                        'local',
+                        file_size
+                    ))
+                    
+                    self.logger.debug(f"Screenshot linked: {organized_path} -> result_id {result_id}")
+                    
+                except Exception as e:
+                    self.logger.warning(f"Failed to link screenshot to result_id {result_id}: {str(e)}")
+                    continue
             
         except Exception as e:
             self.logger.error(f"Failed to store screenshot metadata from {json_file}: {str(e)}")
