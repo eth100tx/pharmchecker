@@ -9,6 +9,13 @@ from typing import Dict, List, Optional, Any
 import plotly.express as px
 import plotly.graph_objects as go
 from datetime import datetime
+import os
+import sys
+
+# Add project root to path for imports
+sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+from imports.validated import ValidatedImporter
+from config import get_db_config
 
 def format_score(score: Optional[float]) -> str:
     """Format score value for display"""
@@ -22,14 +29,25 @@ def format_status_badge(status: str) -> str:
         'match': '✅',
         'weak match': '⚠️', 
         'no match': '❌',
-        'no data': '⚫'
+        'no data': '⚫',
+        'validated': '🔵',
+        'validated empty': '🔵'
     }
     
     icon = status_icons.get(status.lower(), '❓')
     return f"{icon} {status.title()}"
 
 def format_smart_status_badge(row: dict) -> str:
-    """Format status with distinction between No Data Loaded and No Results Found"""
+    """Format status with distinction between No Data Loaded and No Results Found, and validation overrides"""
+    
+    # Check for validation override first
+    override_type = row.get('override_type')
+    if override_type:
+        if override_type == 'present':
+            return "🔵 Validated"  # Blue circle for validated present
+        elif override_type == 'empty':
+            return "🔵 Validated Empty"  # Blue circle for validated empty
+    
     status_bucket = row.get('status_bucket', 'unknown')
     
     # Handle non-"no data" cases normally
@@ -475,6 +493,76 @@ def display_row_detail_section(selected_row: Dict, datasets: Dict[str, str], deb
     
     if search_results.empty:
         st.info("No search results available")
+        
+        # Add validation button for empty records - this is the special case
+        # mentioned by user: for empty records, validate button goes in Pharmacy info section
+        st.markdown("**Validation:**")
+        
+        # Check if validation system is locked
+        system_locked = st.session_state.get('validation_system_locked', True)
+        
+        if system_locked:
+            st.info("🔒 Unlock validation in sidebar to validate empty records")
+        else:
+            # Create a mock result for empty validation  
+            empty_result = pd.Series({
+                'search_name': selected_row['pharmacy_name'],
+                'search_state': selected_row['search_state'],
+                'state': selected_row['search_state'],
+                'license_number': '',  # Empty for empty validations
+                'override_type': None  # Will be set if already validated
+            })
+            
+            # Check if this pharmacy-state combination is already validated as empty
+            try:
+                validated_tag = datasets.get('validated')
+                if validated_tag:
+                    from .database import DatabaseManager
+                    db = DatabaseManager(use_production=True, allow_fallback=False)
+                    
+                    # Query for existing empty validation
+                    existing_validation_sql = """
+                    SELECT override_type FROM validated_overrides vo
+                    JOIN datasets d ON vo.dataset_id = d.id
+                    WHERE d.tag = %s 
+                      AND vo.pharmacy_name = %s 
+                      AND vo.state_code = %s
+                      AND (vo.license_number = '' OR vo.license_number IS NULL)
+                    """
+                    
+                    result_df = db.execute_query(existing_validation_sql, [
+                        validated_tag, 
+                        selected_row['pharmacy_name'], 
+                        selected_row['search_state']
+                    ])
+                    
+                    if not result_df.empty:
+                        empty_result['override_type'] = result_df.iloc[0]['override_type']
+                    
+            except Exception:
+                pass  # Ignore errors in validation check
+            
+            # Show validation toggle for empty record
+            current_validated = empty_result.get('override_type')
+            is_validated_empty = current_validated == 'empty'
+            
+            validation_changed = st.toggle("Validate as Empty", 
+                        value=is_validated_empty, 
+                        key=f"toggle_empty_pharmacy_{selected_row['pharmacy_name']}_{selected_row['search_state']}",
+                        help="Validate that no license exists for this pharmacy in this state")
+                        
+            if validation_changed != is_validated_empty:  # Only act if state actually changed
+                if validation_changed:  # Toggled to validated
+                    handle_validation_toggle(empty_result, datasets, 'empty')
+                else:  # Toggled to not validated
+                    handle_validation_toggle(empty_result, datasets, 'remove')
+            
+            # Show current validation status
+            if current_validated:
+                status_icon = "✅" if current_validated == 'present' else "❌"
+                st.markdown(f"{status_icon} **{current_validated.title()}**")
+            else:
+                st.markdown("⚪ **Not Validated**")
     else:
         # Create pulldown for each search result
         for i, (_, result) in enumerate(search_results.iterrows()):
@@ -800,18 +888,52 @@ def display_detailed_validation_controls(result: pd.Series, datasets: Dict, resu
     # Check if validation system is locked (from sidebar)
     system_locked = st.session_state.get('validation_system_locked', True)
     
+    # Get current validation state by looking up in validation dataset
+    current_validated = None
+    debug_info = ""
+    
+    validated_tag = datasets.get('validated')
+    if validated_tag:
+        try:
+            from .database import DatabaseManager
+            db = DatabaseManager(use_production=True, allow_fallback=False)
+            
+            # Look up validation for this specific search result
+            pharmacy_name = result.get('search_name', '')
+            search_state = result.get('search_state', '')
+            license_number = result.get('license_number', '') or ''
+            
+            validation_sql = """
+            SELECT vo.override_type, vo.dataset_id, d.tag
+            FROM validated_overrides vo
+            JOIN datasets d ON vo.dataset_id = d.id
+            WHERE d.tag = %s 
+              AND vo.pharmacy_name = %s 
+              AND vo.state_code = %s
+              AND (%s = '' AND vo.license_number IS NULL OR vo.license_number = %s)
+            """
+            
+            result_df = db.execute_query(validation_sql, [
+                validated_tag, pharmacy_name, search_state, license_number, license_number
+            ])
+            
+            if not result_df.empty:
+                current_validated = result_df.iloc[0]['override_type']
+                # Debug info for troubleshooting
+                debug_info = f" (Dataset: {result_df.iloc[0]['tag']}, ID: {result_df.iloc[0]['dataset_id']})"
+            
+        except Exception as e:
+            # Continue without validation status on error
+            pass
+    
     if system_locked:
         st.info("🔒 Unlock validation in sidebar to make changes")
-        current_validated = result.get('override_type', None)
         if current_validated:
             status_icon = "✅" if current_validated == 'present' else "❌"
-            st.markdown(f"{status_icon} **{current_validated.title()}**")
+            st.markdown(f"{status_icon} **{current_validated.title()}**{debug_info if st.session_state.get('debug_mode', False) else ''}")
         else:
             st.markdown("⚪ **Not Validated**")
         return
-    
-    # Get current validation state
-    current_validated = result.get('override_type', None)
     
     # Determine if this is a no_data record (for Empty validation)
     has_data = pd.notna(result.get('license_number')) and result.get('license_number') != 'No License'
@@ -821,62 +943,185 @@ def display_detailed_validation_controls(result: pd.Series, datasets: Dict, resu
         # For records with data: toggle between None/present
         is_validated = current_validated == 'present'
         
-        if st.toggle("Validated as Present", 
+        validation_changed = st.toggle("Validate", 
                     value=is_validated, 
                     key=f"toggle_present_{result_idx}",
-                    help="Toggle validation for this search result"):
-            if not is_validated:  # Was not validated, now validating
+                    help="Toggle validation for this search result")
+                    
+        if validation_changed != is_validated:  # Only act if state actually changed
+            if validation_changed:  # Toggled to validated
                 handle_validation_toggle(result, datasets, 'present')
-            else:  # Was validated, now removing
+            else:  # Toggled to not validated
                 handle_validation_toggle(result, datasets, 'remove')
     else:
         # For no_data records: toggle between None/empty
         is_validated_empty = current_validated == 'empty'
         
-        if st.toggle("Validated as Empty", 
+        validation_changed = st.toggle("Validated as Empty", 
                     value=is_validated_empty, 
                     key=f"toggle_empty_{result_idx}",
-                    help="Toggle empty validation for this search"):
-            if not is_validated_empty:  # Was not validated, now validating as empty
+                    help="Toggle empty validation for this search")
+                    
+        if validation_changed != is_validated_empty:  # Only act if state actually changed
+            if validation_changed:  # Toggled to validated
                 handle_validation_toggle(result, datasets, 'empty')
-            else:  # Was validated empty, now removing
+            else:  # Toggled to not validated
                 handle_validation_toggle(result, datasets, 'remove')
     
     # Show current status
     if current_validated:
         status_icon = "✅" if current_validated == 'present' else "❌"
-        st.markdown(f"{status_icon} **{current_validated.title()}**")
+        debug_text = debug_info if st.session_state.get('debug_mode', False) else ''
+        st.markdown(f"{status_icon} **{current_validated.title()}**{debug_text}")
     else:
         st.markdown("⚪ **Not Validated**")
 
-def handle_validation_toggle(result: pd.Series, datasets: Dict, action: str) -> None:
-    """Handle validation toggle actions"""
+def handle_validation_toggle(result: pd.Series, datasets: Dict, action: str) -> bool:
+    """
+    Handle validation toggle actions - actually create/remove validation records
+    
+    Returns:
+        True if action was successful, False otherwise
+    """
     
     pharmacy_name = result.get('search_name', 'Unknown')
-    state = result.get('state', 'Unknown')
-    license_num = result.get('license_number', 'N/A')
+    state = result.get('search_state', 'Unknown')  # Use search_state, not result state
+    license_num = result.get('license_number', '') or ''
     
-    if action == 'present':
-        if not datasets.get('validated'):
-            # Create a tag for validation if none selected
-            suggested_tag = f"validation_{datetime.now().strftime('%Y%m%d_%H%M%S')}"
-            st.success(f"Would create validation dataset '{suggested_tag}' and mark {pharmacy_name} - {state} - {license_num} as PRESENT")
-            st.info("💡 This would integrate with imports/validated.py to create the validation record")
-        else:
-            st.success(f"Would validate {pharmacy_name} - {state} - {license_num} as PRESENT in dataset '{datasets['validated']}'")
-    
-    elif action == 'empty':
-        if not datasets.get('validated'):
-            # Create a tag for validation if none selected
-            suggested_tag = f"validation_{datetime.now().strftime('%Y%m%d_%H%M%S')}"
-            st.success(f"Would create validation dataset '{suggested_tag}' and mark {pharmacy_name} - {state} as EMPTY")
-            st.info("💡 This would integrate with imports/validated.py to create the validation record")
-        else:
-            st.success(f"Would validate {pharmacy_name} - {state} as EMPTY in dataset '{datasets['validated']}'")
-    
-    elif action == 'remove':
-        st.success(f"Would remove validation for {pharmacy_name} - {state} - {license_num}")
-        st.info("💡 This would remove the validation record from the validated dataset")
+    try:
+        with ValidatedImporter() as importer:
+            if action == 'present':
+                # Determine dataset to use
+                validated_tag = datasets.get('validated')
+                if not validated_tag:
+                    # Create new validation dataset
+                    validated_tag = f"validation_{datetime.now().strftime('%Y%m%d_%H%M%S')}"
+                    dataset_id = importer.create_dataset(
+                        'validated', 
+                        validated_tag, 
+                        f"Auto-created validation dataset for {pharmacy_name} - {state}",
+                        'gui_user'
+                    )
+                    st.info(f"✨ Created validation dataset: {validated_tag}")
+                    # Update session state to use new dataset
+                    st.session_state.selected_datasets['validated'] = validated_tag
+                    # Clear cache to refresh dataset lists
+                    if hasattr(st, 'cache_data'):
+                        st.cache_data.clear()
+                else:
+                    # Get existing dataset ID
+                    with importer.conn.cursor() as cur:
+                        cur.execute("SELECT id FROM datasets WHERE kind = 'validated' AND tag = %s", [validated_tag])
+                        result_row = cur.fetchone()
+                        if result_row:
+                            dataset_id = result_row[0]
+                        else:
+                            st.error(f"Validation dataset '{validated_tag}' not found")
+                            return False
+                
+                # Create validation record
+                success = importer.create_validation_record(
+                    dataset_id=dataset_id,
+                    pharmacy_name=pharmacy_name,
+                    state_code=state,
+                    license_number=license_num,
+                    override_type='present',
+                    reason=f"Manual validation via GUI - marked as present",
+                    validated_by='gui_user'
+                )
+                
+                if success:
+                    st.success(f"✅ Validated {pharmacy_name} - {state} - {license_num} as PRESENT")
+                    return True
+                else:
+                    st.error("Failed to create validation record")
+                    return False
+            
+            elif action == 'empty':
+                # Determine dataset to use
+                validated_tag = datasets.get('validated')
+                if not validated_tag:
+                    # Create new validation dataset
+                    validated_tag = f"validation_{datetime.now().strftime('%Y%m%d_%H%M%S')}"
+                    dataset_id = importer.create_dataset(
+                        'validated',
+                        validated_tag,
+                        f"Auto-created validation dataset for {pharmacy_name} - {state}",
+                        'gui_user'
+                    )
+                    st.info(f"✨ Created validation dataset: {validated_tag}")
+                    # Update session state to use new dataset
+                    st.session_state.selected_datasets['validated'] = validated_tag
+                    # Clear cache to refresh dataset lists
+                    if hasattr(st, 'cache_data'):
+                        st.cache_data.clear()
+                else:
+                    # Get existing dataset ID
+                    with importer.conn.cursor() as cur:
+                        cur.execute("SELECT id FROM datasets WHERE kind = 'validated' AND tag = %s", [validated_tag])
+                        result_row = cur.fetchone()
+                        if result_row:
+                            dataset_id = result_row[0]
+                        else:
+                            st.error(f"Validation dataset '{validated_tag}' not found")
+                            return False
+                
+                # Create validation record
+                success = importer.create_validation_record(
+                    dataset_id=dataset_id,
+                    pharmacy_name=pharmacy_name,
+                    state_code=state,
+                    license_number='',  # Empty for 'empty' validations
+                    override_type='empty',
+                    reason=f"Manual validation via GUI - marked as empty",
+                    validated_by='gui_user'
+                )
+                
+                if success:
+                    st.success(f"✅ Validated {pharmacy_name} - {state} as EMPTY")
+                    return True
+                else:
+                    st.error("Failed to create validation record")
+                    return False
+            
+            elif action == 'remove':
+                validated_tag = datasets.get('validated')
+                if not validated_tag:
+                    st.error("No validation dataset selected")
+                    return False
+                
+                # Get dataset ID
+                with importer.conn.cursor() as cur:
+                    cur.execute("SELECT id FROM datasets WHERE kind = 'validated' AND tag = %s", [validated_tag])
+                    result_row = cur.fetchone()
+                    if result_row:
+                        dataset_id = result_row[0]
+                    else:
+                        st.error(f"Validation dataset '{validated_tag}' not found")
+                        return False
+                
+                # Remove validation record
+                success = importer.remove_validation_record(
+                    dataset_id=dataset_id,
+                    pharmacy_name=pharmacy_name,
+                    state_code=state,
+                    license_number=license_num
+                )
+                
+                if success:
+                    st.success(f"🗑️ Removed validation for {pharmacy_name} - {state} - {license_num}")
+                    return True
+                else:
+                    st.warning("No validation record found to remove")
+                    return False
+            
+            else:
+                st.error(f"Unknown validation action: {action}")
+                return False
+                
+    except Exception as e:
+        st.error(f"Error performing validation action: {e}")
+        return False
 
 def handle_validation_action(result: pd.Series, datasets: Dict, action: str) -> None:
     """Legacy function - kept for compatibility"""

@@ -23,6 +23,7 @@ from utils.display import (
     display_search_result_card, display_dense_results_table,
     display_row_detail_section
 )
+from imports.validated import ValidatedImporter
 
 # Page configuration
 st.set_page_config(
@@ -127,7 +128,6 @@ def render_sidebar():
             lock_icon = "🔒" if st.session_state.validation_system_locked else "🔓"
             if st.button(lock_icon, key="validation_system_lock", help="Lock/unlock validation system"):
                 st.session_state.validation_system_locked = not st.session_state.validation_system_locked
-                st.rerun()
         
         with col2:
             if st.session_state.validation_system_locked:
@@ -616,8 +616,57 @@ def render_validation_manager():
         
         if submitted:
             if pharmacy_name and state_code and override_type and reason:
-                st.success(f"Would create {override_type} override for {pharmacy_name} in {state_code}")
-                st.info("This would integrate with imports/validated.py when implemented")
+                try:
+                    # Get current datasets
+                    datasets = st.session_state.selected_datasets
+                    
+                    with ValidatedImporter() as importer:
+                        # Determine dataset to use
+                        validated_tag = datasets.get('validated')
+                        if not validated_tag:
+                            # Create new validation dataset
+                            validated_tag = f"validation_{datetime.now().strftime('%Y%m%d_%H%M%S')}"
+                            dataset_id = importer.create_dataset(
+                                'validated',
+                                validated_tag,
+                                f"GUI-created validation dataset",
+                                'gui_user'
+                            )
+                            st.info(f"✨ Created new validation dataset: {validated_tag}")
+                            # Update session state
+                            st.session_state.selected_datasets['validated'] = validated_tag
+                            # Clear cache to refresh dataset lists
+                            if hasattr(st, 'cache_data'):
+                                st.cache_data.clear()
+                        else:
+                            # Get existing dataset ID
+                            with importer.conn.cursor() as cur:
+                                cur.execute("SELECT id FROM datasets WHERE kind = 'validated' AND tag = %s", [validated_tag])
+                                result = cur.fetchone()
+                                if result:
+                                    dataset_id = result[0]
+                                else:
+                                    st.error(f"Validation dataset '{validated_tag}' not found")
+                                    return
+                        
+                        # Create validation record
+                        success = importer.create_validation_record(
+                            dataset_id=dataset_id,
+                            pharmacy_name=pharmacy_name,
+                            state_code=state_code,
+                            license_number=license_number if override_type == 'present' else '',
+                            override_type=override_type,
+                            reason=reason,
+                            validated_by='gui_user'
+                        )
+                        
+                        if success:
+                            st.success(f"✅ Created {override_type} validation for {pharmacy_name} in {state_code}")
+                        else:
+                            st.error("Failed to create validation record")
+                            
+                except Exception as e:
+                    st.error(f"Error creating validation: {e}")
             else:
                 st.error("Please fill in all required fields")
     
