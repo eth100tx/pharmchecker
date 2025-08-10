@@ -332,10 +332,6 @@ df = pd.read_sql_query(sql, engine)
 
 ## Next Steps - Images Schema Fix
 
-### Current Issue ⚠️
-The `images` table schema only links to `dataset_id` and search metadata, but cannot link to individual `search_results` records. This caused duplicate display issues when joining images in search details.
-
-**Current Workaround**: GUI queries `search_results` without images JOIN to prevent duplicates.
 
 ### Required Fixes
 1. **Update Images Table Schema**
