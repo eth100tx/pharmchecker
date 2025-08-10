@@ -25,7 +25,7 @@ class PharmCheckerSetup:
         self.env_example = self.project_root / '.env.example'
         self.requirements_file = self.project_root / 'requirements.txt'
         self.schema_file = self.project_root / 'schema.sql'
-        self.functions_file = self.project_root / 'functions.sql'
+        self.functions_file = self.project_root / 'functions_optimized.sql'
         self.data_dir = self.project_root / 'data'
         
         self.db_config = None
@@ -199,9 +199,9 @@ class PharmCheckerSetup:
             return False
     
     def create_functions(self) -> bool:
-        """Create database functions from functions.sql"""
+        """Create database functions from functions_optimized.sql"""
         if not self.functions_file.exists():
-            logger.error("functions.sql not found!")
+            logger.error("functions_optimized.sql not found!")
             return False
         
         try:
@@ -210,6 +210,11 @@ class PharmCheckerSetup:
             
             conn = psycopg2.connect(**self.db_config)
             with conn.cursor() as cur:
+                # Drop existing functions first to avoid conflicts
+                cur.execute("DROP FUNCTION IF EXISTS get_results_matrix(text,text,text);")
+                cur.execute("DROP FUNCTION IF EXISTS find_missing_scores(text,text);")
+                
+                # Create the new functions
                 cur.execute(functions_sql)
             conn.commit()
             conn.close()
@@ -265,7 +270,7 @@ class PharmCheckerSetup:
             with conn.cursor() as cur:
                 # Test 1: Check all tables exist
                 expected_tables = [
-                    'datasets', 'pharmacies', 'searches', 'search_results', 
+                    'datasets', 'pharmacies', 'search_results', 
                     'match_scores', 'validated_overrides', 'images', 'app_users'
                 ]
                 

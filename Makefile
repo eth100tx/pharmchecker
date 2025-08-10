@@ -87,20 +87,7 @@ setup:
 # Clean everything and rebuild
 clean_all:
 	@echo "🗑️ Full database reset..."
-	@python3 -c "\
-import os; \
-from dotenv import load_dotenv; \
-load_dotenv(); \
-import psycopg2; \
-conn = psycopg2.connect(host=os.getenv('DB_HOST', 'localhost'), port=int(os.getenv('DB_PORT', 5432)), database=os.getenv('DB_NAME', 'pharmchecker'), user=os.getenv('DB_USER', 'postgres'), password=os.getenv('DB_PASSWORD')); \
-cur = conn.cursor(); \
-tables = ['search_results', 'searches', 'images', 'match_scores', 'validated_overrides', 'pharmacies', 'datasets', 'app_users']; \
-for table in tables: \
-    cur.execute(f'TRUNCATE TABLE {table} RESTART IDENTITY CASCADE'); \
-    print(f'  Cleared {table}'); \
-conn.commit(); \
-conn.close(); \
-print('✅ Database cleared')"
+	@python3 -c "import os; from dotenv import load_dotenv; load_dotenv(); import psycopg2; conn = psycopg2.connect(host=os.getenv('DB_HOST', 'localhost'), port=int(os.getenv('DB_PORT', 5432)), database=os.getenv('DB_NAME', 'pharmchecker'), user=os.getenv('DB_USER', 'postgres'), password=os.getenv('DB_PASSWORD')); cur = conn.cursor(); tables = ['search_results', 'images', 'match_scores', 'validated_overrides', 'pharmacies', 'datasets', 'app_users']; [cur.execute(f'TRUNCATE TABLE {table} RESTART IDENTITY CASCADE') or print(f'  Cleared {table}') for table in tables]; conn.commit(); conn.close(); print('✅ Database cleared')"
 	@make setup
 
 # Run basic import tests

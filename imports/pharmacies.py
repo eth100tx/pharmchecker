@@ -90,9 +90,9 @@ class PharmacyImporter(BaseImporter):
                         else:
                             self.logger.warning(f"Row {idx}: Invalid state license code '{license_code}'")
                     
+                    # Allow pharmacies with no state licenses (they just won't match anything)
                     if not valid_licenses:
-                        errors.append(f"Row {idx}: No valid state licenses")
-                        continue
+                        self.logger.info(f"Row {idx}: Pharmacy '{row['name']}' has no valid state licenses (will be imported but won't match searches)")
                     
                     # Collect additional fields not in core schema
                     known_cols = {'name', 'alias', 'address', 'suite', 'city', 'state', 'zip', 'state_licenses'}

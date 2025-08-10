@@ -323,16 +323,15 @@ class StateImporter(BaseImporter):
             
             # Insert metadata
             self.execute_statement("""
-                INSERT INTO images (dataset_id, state, search_id, search_name, 
+                INSERT INTO images (dataset_id, state, search_name, 
                                    organized_path, storage_type, file_size)
-                VALUES (%s, %s, %s, %s, %s, %s, %s)
+                VALUES (%s, %s, %s, %s, %s, %s)
                 ON CONFLICT (dataset_id, organized_path) DO UPDATE SET
-                    search_id = EXCLUDED.search_id,
+                    search_name = EXCLUDED.search_name,
                     file_size = EXCLUDED.file_size
             """, (
                 dataset_id,
                 search_data['state'],
-                search_id,
                 search_data['name'],
                 organized_path,
                 'local',  # TODO: Support 'supabase' storage type
@@ -711,12 +710,13 @@ class StateImporter(BaseImporter):
                 issue_date = self._parse_date(license_data.get('issue_date'))
                 exp_date = self._parse_date(license_data.get('expiration_date'))
                 
-                # Extract address components
+                # Extract address components (search address)
                 address_data = license_data.get('address', {})
                 street = address_data.get('street') if isinstance(address_data, dict) else license_data.get('address')
                 city = address_data.get('city') if isinstance(address_data, dict) else license_data.get('city')
                 state = address_data.get('state') if isinstance(address_data, dict) else license_data.get('state')
                 zip_code = address_data.get('zip_code') if isinstance(address_data, dict) else license_data.get('zip')
+                
                 
                 # Build result data for merged table
                 combined_meta = {**search_meta, 'source_file': file_path.name}
@@ -728,7 +728,8 @@ class StateImporter(BaseImporter):
                     license_data.get('license_number'),
                     license_data.get('license_status'),
                     license_data.get('pharmacy_name'),  # license_name in schema
-                    street,
+                    license_data.get('license_type'),   # license_type from JSON
+                    street,                  # address
                     city,
                     state,                   # result state (can differ from search_state)
                     zip_code,
@@ -751,7 +752,7 @@ class StateImporter(BaseImporter):
         # Batch insert results with ON CONFLICT handling for deduplication
         columns = [
             'dataset_id', 'search_name', 'search_state', 'search_ts',
-            'license_number', 'license_status', 'license_name',
+            'license_number', 'license_status', 'license_name', 'license_type',
             'address', 'city', 'state', 'zip', 'issue_date', 'expiration_date',
             'result_status', 'meta', 'raw'
         ]
@@ -785,6 +786,7 @@ class StateImporter(BaseImporter):
                     search_ts = EXCLUDED.search_ts,
                     license_status = EXCLUDED.license_status,
                     license_name = EXCLUDED.license_name,
+                    license_type = EXCLUDED.license_type,
                     address = EXCLUDED.address,
                     city = EXCLUDED.city,
                     state = EXCLUDED.state,
@@ -874,16 +876,15 @@ class StateImporter(BaseImporter):
             
             # Insert metadata
             self.execute_statement("""
-                INSERT INTO images (dataset_id, state, search_id, search_name, 
+                INSERT INTO images (dataset_id, state, search_name, 
                                    organized_path, storage_type, file_size)
-                VALUES (%s, %s, %s, %s, %s, %s, %s)
+                VALUES (%s, %s, %s, %s, %s, %s)
                 ON CONFLICT (dataset_id, organized_path) DO UPDATE SET
-                    search_id = EXCLUDED.search_id,
+                    search_name = EXCLUDED.search_name,
                     file_size = EXCLUDED.file_size
             """, (
                 dataset_id,
                 state_dir,
-                search_id,
                 pharmacy_name,
                 organized_path,
                 'local',

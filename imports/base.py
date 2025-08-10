@@ -41,31 +41,74 @@ class BaseImporter:
     def create_dataset(self, kind: str, tag: str, description: str = None, 
                       created_by: str = None) -> int:
         """
-        Create or get dataset ID
+        Create a new dataset with unique tag
         
         Args:
             kind: Dataset type ('states', 'pharmacies', 'validated')
-            tag: Dataset tag/version
+            tag: Dataset tag/version (will be made unique if conflicts exist)
             description: Optional description
             created_by: Who created this dataset
             
         Returns:
             Dataset ID
         """
+        # Find unique tag if conflicts exist
+        unique_tag = self._find_unique_tag(kind, tag)
+        
         with self.conn.cursor() as cur:
             cur.execute("""
                 INSERT INTO datasets (kind, tag, description, created_by)
                 VALUES (%s, %s, %s, %s)
-                ON CONFLICT (kind, tag) DO UPDATE 
-                SET description = EXCLUDED.description,
-                    created_by = COALESCE(EXCLUDED.created_by, datasets.created_by)
                 RETURNING id
-            """, (kind, tag, description, created_by))
+            """, (kind, unique_tag, description, created_by))
             dataset_id = cur.fetchone()[0]
             self.conn.commit()
             
-        self.logger.info(f"Dataset {kind}:{tag} -> ID {dataset_id}")
+        if unique_tag != tag:
+            self.logger.info(f"Dataset {kind}:{tag} -> {unique_tag} (made unique) -> ID {dataset_id}")
+        else:
+            self.logger.info(f"Dataset {kind}:{tag} -> ID {dataset_id}")
         return dataset_id
+    
+    def _find_unique_tag(self, kind: str, base_tag: str) -> str:
+        """
+        Find a unique tag by adding (2), (3), etc. if conflicts exist
+        
+        Args:
+            kind: Dataset type
+            base_tag: Original tag name
+            
+        Returns:
+            Unique tag name
+        """
+        # Check if base tag exists
+        existing = self.execute_one(
+            "SELECT id FROM datasets WHERE kind = %s AND tag = %s",
+            (kind, base_tag)
+        )
+        
+        if not existing:
+            return base_tag
+        
+        # Find next available number
+        counter = 2
+        while True:
+            candidate_tag = f"{base_tag} ({counter})"
+            existing = self.execute_one(
+                "SELECT id FROM datasets WHERE kind = %s AND tag = %s",
+                (kind, candidate_tag)
+            )
+            
+            if not existing:
+                return candidate_tag
+            
+            counter += 1
+            
+            # Safety check to avoid infinite loop
+            if counter > 100:
+                raise Exception(f"Unable to find unique tag for {kind}:{base_tag}")
+                
+        return candidate_tag
     
     def batch_insert(self, table: str, columns: List[str], data: List[Tuple], 
                     batch_size: int = 1000, on_conflict: str = None) -> int:

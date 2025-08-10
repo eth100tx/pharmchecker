@@ -298,15 +298,21 @@ class DatabaseManager:
     
     def get_search_results(self, pharmacy_name: str, state: str, dataset_tag: str) -> pd.DataFrame:
         """Get search results for a specific pharmacy and state"""
+        # Handle dataset tag variations - if just "baseline", try "states_baseline" 
+        if dataset_tag and not dataset_tag.startswith('states_'):
+            dataset_tag = f"states_{dataset_tag}"
+            
         sql = """
-        SELECT sr.*, i.file_path as screenshot_path
+        SELECT sr.*, i.organized_path as screenshot_path
         FROM search_results sr
         JOIN datasets d ON sr.dataset_id = d.id
-        LEFT JOIN images i ON sr.id = i.result_id
+        LEFT JOIN images i ON (sr.dataset_id = i.dataset_id 
+                              AND sr.search_name = i.search_name 
+                              AND sr.search_state = i.state)
         WHERE sr.search_name = %s 
           AND sr.search_state = %s 
           AND d.tag = %s
-        ORDER BY sr.search_ts DESC
+        ORDER BY sr.search_ts DESC, sr.license_number
         """
         
         try:

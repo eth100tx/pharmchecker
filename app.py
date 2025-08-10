@@ -20,7 +20,8 @@ from utils.display import (
     display_dataset_summary, display_results_table, display_metrics_row,
     create_status_distribution_chart, create_score_histogram,
     create_export_button, format_status_badge, display_pharmacy_card,
-    display_search_result_card
+    display_search_result_card, display_dense_results_table,
+    display_row_detail_section
 )
 
 # Page configuration
@@ -93,6 +94,28 @@ def render_sidebar():
             st.sidebar.success(f"**{kind.title()}:** {tag}")
         else:
             st.sidebar.info(f"**{kind.title()}:** Not selected")
+    
+    # Validation controls
+    if datasets.get('validated') or st.session_state.current_page == 'Results Matrix':
+        st.sidebar.subheader("Validation Controls")
+        
+        # Initialize validation lock state
+        if 'validation_system_locked' not in st.session_state:
+            st.session_state.validation_system_locked = True
+        
+        # Lock/unlock validation system
+        col1, col2 = st.sidebar.columns([1, 3])
+        with col1:
+            lock_icon = "🔒" if st.session_state.validation_system_locked else "🔓"
+            if st.button(lock_icon, key="validation_system_lock", help="Lock/unlock validation system"):
+                st.session_state.validation_system_locked = not st.session_state.validation_system_locked
+                st.rerun()
+        
+        with col2:
+            if st.session_state.validation_system_locked:
+                st.write("**Validation Locked**")
+            else:
+                st.write("**Validation Unlocked**")
     
     st.sidebar.markdown("---")
     
@@ -200,25 +223,16 @@ def render_results_matrix():
     # Display current context
     display_dataset_summary(datasets)
     
-    # Filters
-    st.subheader("Filters")
-    col1, col2, col3, col4 = st.columns(4)
+    # Controls row
+    col1, col2 = st.columns([3, 1])
     
     with col1:
-        state_filter = st.multiselect("Filter by State:", ["FL", "PA", "CA", "NY", "TX"])
+        st.subheader("Filters")
     
     with col2:
-        status_filter = st.multiselect("Filter by Status:", ["match", "weak match", "no match", "no data"])
+        debug_mode = st.checkbox("Debug Mode", False, help="Show technical fields")
     
-    with col3:
-        score_range = st.slider("Score Range:", 0.0, 100.0, (0.0, 100.0))
-    
-    with col4:
-        show_warnings = st.checkbox("Show only items with warnings", False)
-    
-    # Load results using database function
-    st.subheader("Results")
-    
+    # Get available states from loaded data
     db = get_database_manager()
     
     with st.spinner("Loading results matrix..."):
@@ -231,6 +245,35 @@ def render_results_matrix():
     if results_df.empty:
         st.warning("No results found for the selected datasets")
         return
+    
+    # Get available states and statuses for filters
+    available_states = sorted(results_df['search_state'].dropna().unique().tolist())
+    available_statuses = sorted(results_df['status_bucket'].dropna().unique().tolist())
+    
+    # Filters row
+    col1, col2, col3, col4 = st.columns(4)
+    
+    with col1:
+        state_options = ['All'] + available_states
+        selected_states = st.multiselect("Filter by State:", state_options, default=['All'])
+        if 'All' in selected_states:
+            state_filter = available_states
+        else:
+            state_filter = [s for s in selected_states if s != 'All']
+    
+    with col2:
+        status_options = ['All'] + available_statuses
+        selected_statuses = st.multiselect("Filter by Status:", status_options, default=['All'])
+        if 'All' in selected_statuses:
+            status_filter = available_statuses
+        else:
+            status_filter = [s for s in selected_statuses if s != 'All']
+    
+    with col3:
+        score_range = st.slider("Score Range:", 0.0, 100.0, (0.0, 100.0))
+    
+    with col4:
+        show_warnings = st.checkbox("Show only items with warnings", False)
     
     # Apply filters
     filtered_data = results_df.copy()
@@ -251,50 +294,28 @@ def render_results_matrix():
     if show_warnings:
         filtered_data = filtered_data[filtered_data['warnings'].notna() & (filtered_data['warnings'] != '')]
     
-    # Display results table
-    selected_row = display_results_table(filtered_data, selectable=True)
-    
-    if selected_row:
-        st.subheader("Selected Row Details")
-        col1, col2 = st.columns(2)
-        with col1:
-            st.json({k: str(v) for k, v in selected_row.items() if k not in ['warnings']}, expanded=False)
-        with col2:
-            if selected_row.get('warnings'):
-                st.write("**Warnings:**")
-                for warning in selected_row['warnings']:
-                    st.warning(warning)
-    
-    # Summary statistics
+    # Summary statistics (replacing charts)
     st.subheader("Summary Statistics")
     
-    total_results = len(filtered_data)
-    matches = len(filtered_data[filtered_data['status_bucket'] == 'match'])
-    weak_matches = len(filtered_data[filtered_data['status_bucket'] == 'weak match']) 
-    no_matches = len(filtered_data[filtered_data['status_bucket'] == 'no match'])
-    no_data = len(filtered_data[filtered_data['status_bucket'] == 'no data'])
+    # Calculate summary stats
+    total_checked = len(results_df)
+    matches_validated = len(filtered_data[filtered_data['status_bucket'] == 'match'])
+    weak_matches = len(filtered_data[filtered_data['status_bucket'] == 'weak match'])
+    no_matches_validated = len(filtered_data[filtered_data['status_bucket'] == 'no match'])
+    not_found = len(filtered_data[(filtered_data['status_bucket'] == 'no data') & filtered_data['latest_result_id'].notna()])
+    no_data = len(filtered_data[(filtered_data['status_bucket'] == 'no data') & filtered_data['latest_result_id'].isna()])
     
-    metrics = {
-        "Total Results": total_results,
-        "Matches": matches,
-        "Weak Matches": weak_matches,
-        "No Matches": no_matches,
-        "No Data": no_data
-    }
+    # Display summary as single line
+    st.markdown(f"**Total Checked:** {total_checked} | **Matches/Validated:** {matches_validated} | **Weak Matches:** {weak_matches} | **No Matches/Validated:** {no_matches_validated} | **Not Found:** {not_found} | **No Data:** {no_data}")
     
-    display_metrics_row(metrics)
+    # Display results table
+    st.subheader("Results")
+    selected_row = display_dense_results_table(filtered_data, debug_mode)
     
-    # Charts
-    col1, col2 = st.columns(2)
-    with col1:
-        chart = create_status_distribution_chart(filtered_data)
-        if chart:
-            st.plotly_chart(chart, use_container_width=True)
-    
-    with col2:
-        score_chart = create_score_histogram(filtered_data)
-        if score_chart:
-            st.plotly_chart(score_chart, use_container_width=True)
+    # Display detailed view below table if a row is selected
+    if selected_row is not None:
+        st.subheader("Detailed View")
+        display_row_detail_section(selected_row, datasets, debug_mode)
     
     # Export functionality
     st.subheader("Export")

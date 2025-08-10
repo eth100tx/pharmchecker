@@ -407,6 +407,7 @@ python test_gui.py
 
 - **`README.md`**: Main project documentation (this file)
 - **`CLAUDE.md`**: Development guidelines and system architecture
+- **`pharmchecker-implementation-docs.md`**: High-level design documentation and original intent
 - **`GUI_README.md`**: Comprehensive GUI usage and integration guide
 - **`plan.md`**: MVP development plan and implementation status
 - **`SYSTEM_TEST.md`**: Detailed system testing documentation

@@ -45,6 +45,7 @@ CREATE TABLE IF NOT EXISTS search_results (
   license_number   TEXT,
   license_status   TEXT,
   license_name     TEXT,              -- Can vary: "Empower TX", "Empower LLC", etc.
+  license_type     TEXT,              -- Type from JSON: "Pharmacy Special Non-Resident", etc.
   address          TEXT,
   city             TEXT,
   state            TEXT,               -- State from result (can differ from search_state)
