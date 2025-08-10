@@ -12,16 +12,18 @@ import logging
 logger = logging.getLogger(__name__)
 
 class DatabaseManager:
-    """Manages database operations using MCP postgres tools"""
+    """Manages database operations with PostgreSQL via SQLAlchemy"""
     
-    def __init__(self, use_production: bool = True):
+    def __init__(self, use_production: bool = True, allow_fallback: bool = False):
         """Initialize database manager
         
         Args:
             use_production: If True, use production database, else sandbox
+            allow_fallback: If True, allow sample data fallback (development only)
         """
         self.use_production = use_production
-        self.db_tool = "mcp__postgres-prod__query" if use_production else "mcp__postgres-sbx__query"
+        self.allow_fallback = allow_fallback
+        # Note: db_tool property kept for backward compatibility but not used in operational system
     
     def execute_query(self, sql: str, params: Optional[List] = None) -> pd.DataFrame:
         """Execute SQL query and return results as DataFrame
@@ -62,12 +64,20 @@ class DatabaseManager:
                 return df
                 
             except (ImportError, Exception) as e:
-                logger.warning(f"Database connection failed: {e}. Using sample data.")
-                return self._get_fallback_data(sql)
+                if self.allow_fallback:
+                    logger.warning(f"Database connection failed: {e}. Using sample data for development.")
+                    return self._get_fallback_data(sql)
+                else:
+                    logger.error(f"Database connection failed: {e}")
+                    raise Exception(f"Database connection required for operational system. Check .env configuration: {e}")
             
         except Exception as e:
-            logger.error(f"Database query failed: {e}")
-            return self._get_fallback_data(sql)
+            if self.allow_fallback:
+                logger.warning(f"Database query failed: {e}. Using sample data for development.")
+                return self._get_fallback_data(sql)
+            else:
+                logger.error(f"Database query failed: {e}")
+                raise Exception(f"Database query failed in operational system: {e}")
     
     def _get_fallback_data(self, sql: str) -> pd.DataFrame:
         """Get sample data when real database is not available"""
@@ -164,7 +174,10 @@ class DatabaseManager:
             'result_status': ['results_found', 'results_found', 'results_found'],
             'screenshot_path': ['image_cache/baseline/FL/belmar_fl.202501_1045.png', 'image_cache/baseline/PA/belmar_pa.202501_1045.png', 'image_cache/baseline/FL/empower_fl.202501_1045.png'],
             'screenshot_storage_type': ['local', 'local', 'local'],
-            'screenshot_file_size': [45821, 52031, 38402]
+            'screenshot_file_size': [45821, 52031, 38402],
+            'score_overall': [96.5, 87.2, 66.5],
+            'score_street': [98.0, 85.0, 70.0],
+            'score_city_state_zip': [94.0, 92.0, 60.0]
         })
     
     def get_datasets(self) -> Dict[str, List[str]]:
@@ -260,7 +273,7 @@ class DatabaseManager:
                           pharmacies_tag: str, 
                           validated_tag: Optional[str] = None,
                           filter_to_loaded_states: bool = True) -> pd.DataFrame:
-        """Get results matrix using optimized database function
+        """Get results matrix using optimized database function with record counts
         
         Args:
             states_tag: States dataset tag
@@ -299,15 +312,57 @@ class DatabaseManager:
                     'license_status': ['Active', None, 'Active'],
                     'score_overall': [96.5, None, 66.5],
                     'status_bucket': ['match', 'no data', 'weak match'],
-                    'warnings': [None, None, None]
+                    'warnings': [None, None, None],
+                    'record_count': [9, 0, 3]
                 })
                 return sample_data
+            
+            # Add record counts by querying search_results directly
+            df = self._add_record_counts(df, states_tag)
             
             return df
             
         except Exception as e:
             logger.error(f"Failed to get results matrix: {e}")
             return pd.DataFrame()
+    
+    def _add_record_counts(self, df: pd.DataFrame, states_tag: str) -> pd.DataFrame:
+        """Add record counts for each pharmacy-state combination"""
+        if df.empty:
+            return df
+            
+        # Get record counts for all pharmacy-state combinations
+        record_counts_sql = """
+        SELECT sr.search_name, sr.search_state, COUNT(*) as record_count
+        FROM search_results sr
+        JOIN datasets d ON sr.dataset_id = d.id
+        WHERE d.tag = %s
+        GROUP BY sr.search_name, sr.search_state
+        """
+        
+        try:
+            counts_df = self.execute_query(record_counts_sql, [states_tag])
+            
+            # Merge with results matrix
+            df_with_counts = df.merge(
+                counts_df,
+                left_on=['pharmacy_name', 'search_state'],
+                right_on=['search_name', 'search_state'],
+                how='left'
+            )
+            
+            # Fill missing counts with 0 and drop the extra search_name column
+            df_with_counts['record_count'] = df_with_counts['record_count'].fillna(0).astype(int)
+            if 'search_name' in df_with_counts.columns:
+                df_with_counts = df_with_counts.drop('search_name', axis=1)
+                
+            return df_with_counts
+            
+        except Exception as e:
+            logger.error(f"Failed to add record counts: {e}")
+            # Return original dataframe with 0 counts if counting fails
+            df['record_count'] = 0
+            return df
     
     def find_missing_scores(self, states_tag: str, pharmacies_tag: str) -> pd.DataFrame:
         """Find pharmacy/result pairs that need scoring"""
@@ -365,10 +420,14 @@ class DatabaseManager:
                    ELSE NULL 
                END as screenshot_path,
                img.storage_type as screenshot_storage_type,
-               img.file_size as screenshot_file_size
+               img.file_size as screenshot_file_size,
+               ms.score_overall,
+               ms.score_street,
+               ms.score_city_state_zip
         FROM search_results sr
         JOIN datasets d ON sr.dataset_id = d.id
         LEFT JOIN images img ON img.search_result_id = sr.id
+        LEFT JOIN match_scores ms ON ms.result_id = sr.id 
         WHERE sr.search_name = %s 
           AND sr.search_state = %s 
           AND d.tag = %s
@@ -415,9 +474,15 @@ class DatabaseManager:
 
 # Global database manager instance
 @st.cache_resource
-def get_database_manager(use_production: bool = True) -> DatabaseManager:
-    """Get cached database manager instance"""
-    return DatabaseManager(use_production=use_production)
+def get_database_manager(use_production: bool = True, allow_fallback: bool = False) -> DatabaseManager:
+    """Get cached database manager instance
+    
+    Args:
+        use_production: If True, use production database, else sandbox
+        allow_fallback: If True, allow sample data fallback for development only
+                       IMPORTANT: Must be False for operational system (no hardcoded data)
+    """
+    return DatabaseManager(use_production=use_production, allow_fallback=allow_fallback)
 
 def query_with_cache(sql: str, params: Optional[Dict] = None, ttl: int = 300) -> pd.DataFrame:
     """Execute query with Streamlit caching"""

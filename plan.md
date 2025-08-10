@@ -5,44 +5,119 @@ Creating a Streamlit-based MVP GUI for the PharmChecker pharmacy license verific
 
 ## Current Status
 - ✅ Core system operational with 96.5% accuracy scoring
-- ✅ Database schema optimized with merged search_results table
+- ✅ Database schema optimized with merged search_results table  
 - ✅ Import system complete for pharmacies and state searches
 - ✅ Lazy scoring engine with fuzzy address matching
-- 📋 **IN PROGRESS**: MVP GUI implementation
+- ✅ **COMPLETED**: MVP GUI implementation with comprehensive enhancements
+- ✅ **COMPLETED**: Real database integration with enhanced features
+- 📋 **NEXT**: Validated functionality implementation
 
-## MVP GUI Requirements
+## ✅ MVP GUI - COMPLETED WITH ENHANCEMENTS
 
-### Core Functionality
-1. **Dataset Management**
-   - View available datasets (pharmacies, states, validated)
-   - Select dataset combinations for analysis
-   - Display dataset metadata and record counts
+### Core Functionality ✅ **All Implemented**
+1. **Dataset Management** ✅
+   - ✅ View available datasets (pharmacies, states, validated) with real data counts
+   - ✅ Select dataset combinations for analysis  
+   - ✅ Display dataset metadata and record counts
 
-2. **Results Matrix View**
-   - Main view combining pharmacy, search, and scoring data
-   - Filter by state, status (match/weak/no match/no data)
-   - Sort and pagination controls
-   - Export functionality
+2. **Results Matrix View** ✅ **Enhanced**
+   - ✅ Main view combining pharmacy, search, and scoring data
+   - ✅ **ENHANCED**: Accurate record counts per pharmacy-state combination
+   - ✅ **ENHANCED**: Smart status distinction (No Data Loaded vs No Results Found)
+   - ✅ **ENHANCED**: Clean display with blank cells for missing data
+   - ✅ Filter by state, status, score range, warnings
+   - ✅ Sort and pagination controls with export functionality
 
-3. **Scoring Management**
-   - Trigger lazy scoring computation
-   - Display scoring progress and status
-   - View scoring statistics and accuracy metrics
+3. **Scoring Management** ✅
+   - ✅ Automatic lazy scoring computation on dataset access
+   - ✅ Display scoring progress and status
+   - ✅ View scoring statistics and accuracy metrics
+   - ✅ **ENHANCED**: Complete score breakdown (Overall/Address/City-State-ZIP)
 
-4. **Detail Views**
-   - Pharmacy details with all state licenses
-   - Search result details with screenshots
-   - Address comparison for scoring validation
+4. **Detail Views** ✅ **Significantly Enhanced**
+   - ✅ **ENHANCED**: Complete pharmacy profiles (name, alias, address, suite, phone, licensed states)
+   - ✅ **ENHANCED**: Search state context in headers
+   - ✅ **ENHANCED**: Complete match scoring display (all three components)
+   - ✅ **ENHANCED**: Smart address highlighting in pulldowns
+   - ✅ **ENHANCED**: Optimized screenshot workflow (thumbnails + expandable full-size)
+   - ✅ **ENHANCED**: Side-by-side address comparison with color coding
 
-5. **Validation Override**
-   - Manual override interface (force match/no match)
-   - Validation history and audit trail
-   - Override reason tracking
+5. **Validation Override** ✅ **Framework Ready**
+   - ✅ Manual override interface framework (GUI implemented)
+   - ✅ Validation history display
+   - ✅ Override reason tracking interface
+   - 📋 **PENDING**: Backend ValidatedImporter implementation
+
+## Recent Session Accomplishments ✨
+
+### Database Integration Improvements
+- **Fixed Schema Issues**: Corrected `zip_code` vs `zip` column name mismatch
+- **Enhanced Queries**: `get_search_results()` now JOINs with `match_scores` table
+- **Performance**: Added `_add_record_counts()` for accurate record counting
+- **Real Data**: `get_pharmacy_info()` queries live database with full profile data
+
+### UI/UX Enhancements  
+- **Smart Status Logic**: Distinguishes actual data availability vs search failure
+- **Complete Scoring**: All three score components visible (Overall/Address/City-State-ZIP)
+- **Address Highlighting**: Component-based matching with visual feedback
+- **Clean Interface**: Blank cells instead of placeholder text for missing data
+- **Context Awareness**: Dynamic headers showing search state being viewed
+- **Workflow Optimization**: Screenshot placement for efficient data verification
+
+## 🎯 Next Phase: Validated Functionality Implementation
+
+### Current Status
+- ✅ **Database Schema**: `validated_overrides` table fully implemented with snapshot architecture
+- ✅ **Database Functions**: `get_results_matrix()` includes validation logic with override handling
+- ✅ **GUI Framework**: Validation Manager interface implemented with forms and display
+- 📋 **PENDING**: `ValidatedImporter` backend implementation
+
+### Validated Override System Architecture ✅ **Research Complete**
+
+#### Database Structure (Implemented)
+- **`validated_overrides` Table**: Stores manual validation snapshots
+- **Natural Key Design**: Uses pharmacy_name + state_code + license_number (not internal IDs)
+- **Override Types**: 
+  - `'present'`: Force match regardless of score
+  - `'empty'`: Force no match status  
+- **Snapshot Architecture**: Captures complete search result state at validation time
+- **Warning System**: Detects when search results change after validation
+
+#### GUI Integration (Framework Ready)
+- **Validation Manager Page**: Create/view validation overrides
+- **Results Matrix Integration**: Shows override status and warnings
+- **Lock/Unlock System**: Validation controls with safety locks
+- **Audit Trail Display**: View existing validation history
+
+#### Data Import Format (Specified)
+```csv
+pharmacy_name,state_code,license_number,override_type,reason,validated_by
+Empower Pharmacy,TX,12345,present,Verified active license,admin
+MedPoint Compounding,FL,,empty,No FL license found,admin
+```
+
+### Implementation Tasks for Next Session
+1. **Create ValidatedImporter Class** (`imports/validated.py`)
+   - CSV import functionality with validation snapshots
+   - Error handling and data validation
+   - Integration with existing BaseImporter framework
+
+2. **Connect GUI to Backend**
+   - Wire validation form to create actual database records
+   - Implement validation creation workflow
+   - Add validation editing/deletion capabilities
+
+3. **Testing & Integration**
+   - Test validation override logic with real data
+   - Verify warning system functionality
+   - End-to-end validation workflow testing
 
 ## Technical Architecture
 
 ### Database Integration
-- Use existing MCP postgres tools for all database operations
+- **Application Database**: Uses SQLAlchemy with PostgreSQL via .env configuration
+- **No MCP in Application**: MCP tools are for Claude debugging only, not application operations
+- **Live Database Required**: No hardcoded or sample data in operational system
 - Leverage optimized `get_results_matrix()` and `find_missing_scores()` functions
 - Support for multiple dataset tag combinations
 
@@ -181,14 +256,14 @@ utils/
 
 #### ✅ Technical Implementation
 - **Streamlit UI**: Modern responsive interface with sidebar navigation
-- **Database Layer**: Utility classes for MCP postgres integration
+- **Database Layer**: SQLAlchemy integration with PostgreSQL via .env configuration
 - **Display Components**: Reusable charts, tables, and formatting utilities
-- **Sample Data**: Working with realistic test data for development
+- **Live Database**: Operational system connects to real PostgreSQL database
 - **Error Handling**: Comprehensive error handling and user feedback
 
 #### ✅ Quality Assurance
 - **Test Suite**: Complete test coverage with `test_gui.py`
-- **Integration Ready**: Framework ready for real MCP database connections
+- **Production Ready**: Application uses standard PostgreSQL connections via SQLAlchemy
 - **Documentation**: Comprehensive plan with implementation details
 
 ### 🚀 Running the GUI
@@ -204,24 +279,26 @@ streamlit run app.py
 python test_gui.py
 ```
 
-### 🔌 MCP Database Integration
+### 🔌 Database Integration
 
-The GUI is designed to work with MCP database connections. To connect to real data:
+The GUI connects to PostgreSQL using standard SQLAlchemy connections via .env configuration:
 
-1. **Replace Sample Data**: Update `utils/database.py` methods to use actual MCP calls
-2. **Query Integration**: The SQL queries are already prepared for the optimized schema
-3. **Function Mapping**: All database functions (`get_results_matrix`, `find_missing_scores`) are integrated
+1. **Environment Configuration**: Application uses `.env` file for database connection details
+2. **SQLAlchemy Integration**: Standard PostgreSQL connections via `config.get_db_config()`
+3. **Operational Mode**: System requires live database connection (allow_fallback=False by default)
+4. **No Sample Data**: All data comes from database in operational system
 
-Example MCP integration:
+Database connection implementation:
 ```python
-# In utils/database.py, replace sample data methods with:
-import streamlit as st
+# In utils/database.py - operational mode
+from sqlalchemy import create_engine
+from config import get_db_config
 
-def execute_query(self, sql: str, params=None):
-    if self.use_production:
-        return st.experimental_connection("postgres-prod").query(sql, params)
-    else:
-        return st.experimental_connection("postgres-sbx").query(sql, params)
+db_config = get_db_config()
+engine = create_engine(
+    f"postgresql://{db_config['user']}:{db_config['password']}@{db_config['host']}:{db_config['port']}/{db_config['database']}"
+)
+df = pd.read_sql_query(sql, engine)
 ```
 
 ### 📊 GUI Features

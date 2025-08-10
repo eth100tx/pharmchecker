@@ -15,15 +15,33 @@ PharmChecker is a lightweight internal tool for verifying pharmacy licenses acro
 - **Manual Control**: All refresh and recalculation actions are explicit
 - **Validation as Snapshot**: Validated overrides capture the full search result at validation time
 
-## Database Access
+## Database Access Architecture
 
-This project uses MCP (Model Context Protocol) servers to connect to PostgreSQL databases:
+### Application Database Connection
+The PharmChecker application uses **standard PostgreSQL connections** via environment variables (`.env`):
 
-- **postgres-prod**: Production database at `localhost:5432/pharmchecker`
-- **postgres-sbx**: Sandbox database at `localhost:5432/testing_sandbox_db`
-- **supabase**: Supabase project integration (requires project-ref configuration)
+```bash
+DB_HOST=localhost
+DB_PORT=5432
+DB_NAME=pharmchecker  
+DB_USER=postgres
+DB_PASSWORD=your_password
+```
 
-Use the MCP tools (`mcp__postgres-prod__query`, `mcp__postgres-sbx__query`, `mcp__supabase__*`) to interact with databases.
+The application uses:
+- **SQLAlchemy**: Standard Python database ORM for all database operations
+- **Environment Variables**: Database credentials from `.env` file
+- **Connection Pooling**: Efficient database connection management
+- **Live Data Only**: No hardcoded or sample data in operational system
+
+### Claude Development/Debug Access (MCP) 
+**For Claude Code development only** - NOT used by the application:
+
+- **postgres-prod**: Production database access for Claude debugging
+- **postgres-sbx**: Sandbox database access for Claude testing  
+- **supabase**: Supabase project integration for Claude development
+
+**Important**: MCP tools (`mcp__postgres-prod__query`, `mcp__postgres-sbx__query`, `mcp__supabase__*`) are exclusively for Claude's development and debugging. The actual PharmChecker application never uses MCP.
 
 ## Core Architecture Components
 

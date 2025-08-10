@@ -107,14 +107,14 @@ streamlit run app.py
 python test_gui.py
 ```
 
-Access the web interface at `http://localhost:8501` with features:
+Access the web interface at `http://localhost:8501` with **enhanced** features:
 - **Dataset Management**: Interactive selection with real data counts and loaded states
-- **Results Matrix**: Advanced filtering, charts, and export (filtered to loaded states by default)
-- **Scoring Dashboard**: Real-time statistics and controls  
-- **Detail Views**: Pharmacy and search result analysis (without duplicate display issues)
-- **Validation Manager**: Manual override interface
+- **Results Matrix**: ✨ **Enhanced with accurate record counts, smart status distinction (No Data Loaded vs No Results Found), clean blank display for missing data**
+- **Scoring Dashboard**: Real-time statistics and controls with complete match score breakdown
+- **Detail Views**: ✨ **Enhanced with complete pharmacy profiles, search state context, all three score components (Overall/Address/City-State-ZIP), smart address highlighting, and optimized screenshot workflow**
+- **Validation Manager**: Manual override interface with audit trail
 
-**Current Status**: ✅ **Fully operational with real database integration**
+**Current Status**: ✅ **Production-ready with comprehensive enhancements and real database integration**
 
 ## Data Import
 
@@ -302,10 +302,13 @@ PharmChecker uses advanced address matching with **automatic lazy scoring**:
 
 ## Configuration
 
-Set these environment variables in `.env`:
+### Database Configuration (Required)
+The PharmChecker application uses **standard PostgreSQL connections** via environment variables.
+
+Set these in `.env`:
 
 ```bash
-# Database
+# Database (Required - No fallback data in operational system)
 DB_HOST=localhost
 DB_PORT=5432  
 DB_NAME=pharmchecker
@@ -319,6 +322,8 @@ DATA_DIR=data
 # Streamlit
 STREAMLIT_PORT=8501
 ```
+
+**Important**: The operational system requires a live database connection. No hardcoded or sample data is used in production. Ensure your PostgreSQL database is properly configured and accessible.
 
 ## Development
 
@@ -380,12 +385,14 @@ The MVP GUI provides comprehensive functionality through an intuitive web interf
 - **Metadata Display**: View record counts and creation dates
 - **Status Validation**: Ensures proper dataset combinations
 
-### Results Matrix
-- **Comprehensive View**: All pharmacy-state combinations with scoring
+### Results Matrix ✨ **Enhanced**
+- **Accurate Record Counts**: Shows precise count of search results per pharmacy-state combination
+- **Smart Status Classification**: Distinguishes "No Data Loaded" vs "No Results Found"
+- **Clean Display**: Blank cells for missing data instead of placeholder text
 - **Advanced Filtering**: By state, status, score range, warnings
-- **Interactive Charts**: Status distribution and score histograms
+- **Interactive Charts**: Status distribution and score histograms  
 - **Export Functionality**: CSV download with timestamps
-- **Row Selection**: Click to view detailed information
+- **Row Selection**: Click to view enhanced detailed information
 
 ### Scoring Dashboard
 - **Real-time Statistics**: Current scoring status and accuracy metrics
@@ -393,12 +400,13 @@ The MVP GUI provides comprehensive functionality through an intuitive web interf
 - **Batch Operations**: Trigger scoring computations
 - **Performance Metrics**: Average scores and classification rates
 
-### Detail Views
-- **Pharmacy Profiles**: Complete information with state-by-state breakdown
-- **Search Results**: Individual search details with **live screenshots** ✨
-- **Address Comparisons**: Side-by-side scoring analysis
-- **License Validation**: Current status and expiration tracking
-- **Image Display**: Automatic screenshot display from cached images
+### Detail Views ✨ **Enhanced**
+- **Complete Pharmacy Profiles**: Name, alias, full address, phone, licensed states with search state context
+- **Enhanced Search Results**: Individual search details with complete match scoring (Overall/Address/City-State-ZIP)
+- **Smart Address Highlighting**: Bold formatting for matching address components in pulldowns
+- **Optimized Screenshot Workflow**: Small thumbnails + expandable full-size screenshots at bottom for side-by-side comparison
+- **Address Comparisons**: Side-by-side search result vs. pharmacy reference addresses with color coding
+- **License Validation**: Current status and expiration tracking with search state context
 
 ### Validation Manager
 - **Manual Overrides**: Create present/empty validations
