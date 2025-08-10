@@ -28,6 +28,25 @@ def format_status_badge(status: str) -> str:
     icon = status_icons.get(status.lower(), '❓')
     return f"{icon} {status.title()}"
 
+def format_smart_status_badge(row: dict) -> str:
+    """Format status with distinction between No Data Loaded and No Results Found"""
+    status_bucket = row.get('status_bucket', 'unknown')
+    
+    # Handle non-"no data" cases normally
+    if status_bucket != 'no data':
+        return format_status_badge(status_bucket)
+    
+    # For "no data" cases, distinguish between the two types
+    latest_result_id = row.get('latest_result_id')
+    result_id = row.get('result_id')
+    
+    if pd.isna(latest_result_id) or latest_result_id is None:
+        # No search record exists at all
+        return "⚪ No Data Loaded"
+    else:
+        # Search record exists but no results found
+        return "⚫ No Results Found"
+
 def format_warnings(warnings: Optional[List[str]]) -> str:
     """Format warnings list for display"""
     if not warnings:
@@ -215,8 +234,8 @@ def display_pharmacy_card(pharmacy_data: Dict[str, Any]) -> None:
                 address_parts.append(pharmacy_data['city'])
             if pharmacy_data.get('state'):
                 address_parts.append(pharmacy_data['state'])
-            if pharmacy_data.get('zip_code'):
-                address_parts.append(pharmacy_data['zip_code'])
+            if pharmacy_data.get('zip'):
+                address_parts.append(pharmacy_data['zip'])
             
             if address_parts:
                 st.write(", ".join(address_parts))
@@ -266,8 +285,13 @@ def display_search_result_card(result_data: Dict[str, Any]) -> None:
             # Display screenshot if available
             if result_data.get('screenshot_path'):
                 try:
+                    # Display thumbnail
                     st.image(result_data['screenshot_path'], caption="Search Screenshot", width=200)
-                except:
+                    
+                    # Add expandable full-size view
+                    with st.expander("🔍 View Full Size"):
+                        st.image(result_data['screenshot_path'], caption="Full Size Search Screenshot", use_container_width=True)
+                except Exception as e:
                     st.info("Screenshot not available")
 
 def create_export_button(df: pd.DataFrame, filename_prefix: str = "pharmchecker_export") -> None:
@@ -330,7 +354,7 @@ def display_dense_results_table(df: pd.DataFrame, debug_mode: bool) -> Optional[
         
         # Format license display
         if license_count == 0:
-            license_display = "No License"
+            license_display = ""  # Leave blank if no license
         elif license_count == 1:
             license_display = str(license_numbers[0])
         else:
@@ -340,7 +364,8 @@ def display_dense_results_table(df: pd.DataFrame, debug_mode: bool) -> Optional[
         # Create row for display
         row_data = best_row.copy()
         row_data['license_display'] = license_display
-        row_data['result_count'] = len(group)
+        # Use the record_count from database if available, otherwise use group length
+        row_data['result_count'] = best_row.get('record_count', len(group))
         grouped_results.append(row_data)
     
     # Create display dataframe for the table
@@ -350,8 +375,9 @@ def display_dense_results_table(df: pd.DataFrame, debug_mode: bool) -> Optional[
             'Pharmacy': row['pharmacy_name'],
             'State': row['search_state'],
             'License #': row['license_display'],
-            'Status': format_status_badge(row.get('status_bucket', 'unknown')),
-            'Score': f"{row['score_overall']:.1f}%" if pd.notna(row.get('score_overall')) else "No Score"
+            'Records': row['result_count'],
+            'Status': format_smart_status_badge(row),
+            'Score': f"{row['score_overall']:.1f}%" if pd.notna(row.get('score_overall')) else ""
         }
         
         if debug_mode:
@@ -382,27 +408,60 @@ def display_dense_results_table(df: pd.DataFrame, debug_mode: bool) -> Optional[
 def display_row_detail_section(selected_row: Dict, datasets: Dict[str, str], debug_mode: bool) -> None:
     """Display detailed view section below the table for selected row"""
     
-    # Pharmacy information section (highlighted in blue)
-    st.markdown("##### :blue[Pharmacy Information]")
+    # Pharmacy information section with search context
+    search_state = selected_row.get('search_state', 'Unknown')
+    st.markdown(f"##### :blue[Pharmacy Information] - Viewing {search_state} Search Results")
     
     # Get pharmacy details from database
     pharmacy_details = get_pharmacy_info(selected_row['pharmacy_name'], datasets.get('pharmacies', ''))
     
+    # Debug info if pharmacy_details is empty
+    if not pharmacy_details:
+        st.warning(f"⚠️ No pharmacy details found for '{selected_row['pharmacy_name']}' in dataset '{datasets.get('pharmacies', 'None')}'")
+    
     col1, col2 = st.columns(2)
     with col1:
         st.markdown(f"**Name:** :blue[{selected_row['pharmacy_name']}]")
-        if pharmacy_details.get('address'):
-            addr_parts = []
+        
+        # Show alias if available
+        alias = pharmacy_details.get('alias') if pharmacy_details else None
+        if alias:
+            st.markdown(f"**Alias:** :blue[{alias}]")
+        
+        # Build and show full address
+        addr_parts = []
+        if pharmacy_details:
             if pharmacy_details.get('address'): addr_parts.append(pharmacy_details['address'])
+            if pharmacy_details.get('suite'): addr_parts.append(f"Suite {pharmacy_details['suite']}")
             if pharmacy_details.get('city'): addr_parts.append(pharmacy_details['city'])
             if pharmacy_details.get('state'): addr_parts.append(pharmacy_details['state'])
-            if pharmacy_details.get('zip_code'): addr_parts.append(pharmacy_details['zip_code'])
-            
+            if pharmacy_details.get('zip'): addr_parts.append(str(pharmacy_details['zip']))
+        
+        if addr_parts:
             st.markdown(f"**Address:** :blue[{', '.join(addr_parts)}]")
+        elif pharmacy_details:  # We have pharmacy_details but no address components
+            st.markdown("**Address:** :blue[Address not available]")
         
     with col2:
-        if pharmacy_details.get('phone'):
-            st.markdown(f"**Phone:** :blue[{pharmacy_details['phone']}]")
+        # Show phone if available
+        phone = pharmacy_details.get('phone') if pharmacy_details else None
+        if phone:
+            st.markdown(f"**Phone:** :blue[{phone}]")
+        
+        # Show licensed states if available
+        state_licenses = pharmacy_details.get('state_licenses') if pharmacy_details else None
+        if state_licenses:
+            try:
+                import json
+                licenses = state_licenses
+                if isinstance(licenses, str):
+                    licenses = json.loads(licenses)
+                if isinstance(licenses, list):
+                    st.markdown(f"**Licensed States:** :blue[{', '.join(licenses)}]")
+                else:
+                    st.markdown(f"**Licensed States:** :blue[{licenses}]")
+            except Exception as e:
+                st.markdown(f"**Licensed States:** :blue[{state_licenses}]")
     
     # Search Results section
     st.markdown("##### Search Results")
@@ -419,9 +478,14 @@ def display_row_detail_section(selected_row: Dict, datasets: Dict[str, str], deb
     else:
         # Create pulldown for each search result
         for i, (_, result) in enumerate(search_results.iterrows()):
-            match_pct = ""
-            if pd.notna(result.get('score_overall')):
-                match_pct = f" ({result['score_overall']:.1f}% match)"
+            # Get score information for highlighting
+            score = result.get('score_overall')
+            score_text = ""
+            is_strong_match = False
+            
+            if pd.notna(score):
+                is_strong_match = score >= 90  # Bold for >90% matches
+                score_text = f" (**{score:.1f}% match**)" if is_strong_match else f" ({score:.1f}% match)"
             
             # Build comprehensive license info for title
             license_parts = []
@@ -443,39 +507,112 @@ def display_row_detail_section(selected_row: Dict, datasets: Dict[str, str], deb
             
             license_info = ' - '.join(license_parts) if license_parts else 'No License'
             
-            expander_title = f"Result {i+1}: {license_info}{match_pct}"
+            # Build search result address for comparison
+            search_addr_parts = []
+            if result.get('address'): search_addr_parts.append(str(result['address']))
+            if result.get('city'): search_addr_parts.append(str(result['city']))
+            if result.get('state'): search_addr_parts.append(str(result['state']))
+            if result.get('zip'): search_addr_parts.append(str(result['zip']))
+            
+            search_address = ', '.join(search_addr_parts) if search_addr_parts else 'No Address'
+            
+            # Highlight matching address parts by comparing to pharmacy address
+            highlighted_address = _highlight_address_matches(search_address, pharmacy_details)
+            
+            expander_title = f"Result {i+1}: {license_info}{score_text} | {highlighted_address}"
             
             with st.expander(expander_title, expanded=(i == 0)):
                 display_enhanced_search_result_detail(result, pharmacy_details, datasets, debug_mode, i)
 
 
+def _highlight_address_matches(search_address: str, pharmacy_details: Dict) -> str:
+    """Highlight parts of search address that match pharmacy address"""
+    if not pharmacy_details or not search_address:
+        return search_address
+    
+    # Build individual pharmacy address components for matching
+    pharmacy_components = {
+        'address': pharmacy_details.get('address', '').lower().strip(),
+        'city': pharmacy_details.get('city', '').lower().strip(), 
+        'state': pharmacy_details.get('state', '').lower().strip(),
+        'zip': str(pharmacy_details.get('zip', '')).lower().strip()
+    }
+    
+    # Remove empty components
+    pharmacy_components = {k: v for k, v in pharmacy_components.items() if v}
+    
+    if not pharmacy_components:
+        return search_address
+    
+    # Split search address into parts
+    search_parts = [part.strip() for part in search_address.split(',')]
+    highlighted_parts = []
+    
+    for part in search_parts:
+        part_lower = part.lower().strip()
+        is_match = False
+        
+        # Check if this part matches any pharmacy component
+        for comp_type, comp_value in pharmacy_components.items():
+            if comp_value and (part_lower == comp_value or comp_value in part_lower or part_lower in comp_value):
+                is_match = True
+                break
+        
+        if is_match:
+            highlighted_parts.append(f"**{part}**")
+        else:
+            highlighted_parts.append(part)
+    
+    return ', '.join(highlighted_parts)
+
 def get_pharmacy_info(pharmacy_name: str, pharmacies_dataset: str) -> Dict:
     """Get pharmacy information from database"""
-    # This would query the database for pharmacy details
-    # For now, return sample data
+    from .database import DatabaseManager
+    
+    try:
+        db = DatabaseManager(use_production=True, allow_fallback=False)
+        sql = """
+        SELECT p.name, p.alias, p.address, p.suite, p.city, p.state, p.zip, p.state_licenses
+        FROM pharmacies p
+        JOIN datasets d ON p.dataset_id = d.id
+        WHERE p.name = %s AND d.tag = %s
+        """
+        
+        df = db.execute_query(sql, [pharmacy_name, pharmacies_dataset])
+        
+        if not df.empty:
+            return df.iloc[0].to_dict()
+            
+    except Exception as e:
+        logger.warning(f"Failed to get pharmacy info from database: {e}")
+    
+    # Fallback to sample data
     sample_pharmacies = {
         'Belmar Pharmacy': {
             'name': 'Belmar Pharmacy',
+            'alias': 'Belmar',
             'address': '123 Main St',
             'city': 'Tampa', 
             'state': 'FL',
-            'zip_code': '33601',
+            'zip': '33601',
             'phone': '813-555-0123'
         },
         'Beaker Pharmacy': {
             'name': 'Beaker Pharmacy',
+            'alias': 'Beaker',
             'address': '456 Oak Ave',
             'city': 'Miami',
             'state': 'FL', 
-            'zip_code': '33101',
+            'zip': '33101',
             'phone': '305-555-0456'
         },
         'Empower Pharmacy': {
             'name': 'Empower Pharmacy',
+            'alias': 'Empower',
             'address': '789 Pine Rd',
             'city': 'Orlando',
             'state': 'FL',
-            'zip_code': '32801',
+            'zip': '32801',
             'phone': '407-555-0789'
         }
     }
@@ -487,7 +624,7 @@ def get_search_results_for_detail(pharmacy_name: str, state: str, states_dataset
     from .database import DatabaseManager
     
     try:
-        db = DatabaseManager(use_production=True)
+        db = DatabaseManager(use_production=True, allow_fallback=False)
         return db.get_search_results(pharmacy_name, state, states_dataset)
     except Exception as e:
         st.error(f"Failed to load search results: {e}")
@@ -501,8 +638,9 @@ def display_enhanced_search_result_detail(result: pd.Series, pharmacy_info: Dict
     with col1:
         st.markdown("**Search Result:**")
         
-        # Search results pharmacy name
+        # Search results pharmacy name and state
         st.write(f"**Search Name:** {result.get('search_name', 'N/A')}")
+        st.write(f"**Search State:** {result.get('search_state', 'N/A')}")
         
         # License information including license_name and license_type
         st.write(f"**License #:** {result.get('license_number', 'N/A')}")
@@ -511,7 +649,6 @@ def display_enhanced_search_result_detail(result: pd.Series, pharmacy_info: Dict
         st.write(f"**Status:** {result.get('license_status', 'N/A')}")
         if result.get('license_type'):
             st.write(f"**Type:** {result.get('license_type', 'N/A')}")
-        st.write(f"**State:** {result.get('state', 'N/A')}")
         
         # Search result address with bold matching parts
         search_addr_parts = []
@@ -536,7 +673,7 @@ def display_enhanced_search_result_detail(result: pd.Series, pharmacy_info: Dict
         if pharmacy_info.get('address'): pharmacy_addr_parts.append(pharmacy_info['address'])
         if pharmacy_info.get('city'): pharmacy_addr_parts.append(pharmacy_info['city'])
         if pharmacy_info.get('state'): pharmacy_addr_parts.append(pharmacy_info['state'])
-        if pharmacy_info.get('zip_code'): pharmacy_addr_parts.append(pharmacy_info['zip_code'])
+        if pharmacy_info.get('zip'): pharmacy_addr_parts.append(pharmacy_info['zip'])
         
         pharmacy_address = ', '.join(pharmacy_addr_parts) if pharmacy_addr_parts else 'N/A'
         
@@ -551,9 +688,15 @@ def display_enhanced_search_result_detail(result: pd.Series, pharmacy_info: Dict
         elif license_address:
             st.markdown(f"**License Address:** Same as search address")
         
-        # Match percentage
+        # Match scores - show all three if available
         if pd.notna(result.get('score_overall')):
-            st.write(f"**Match:** {result['score_overall']:.1f}%")
+            st.write(f"**Overall Score:** {result['score_overall']:.1f}%")
+            
+        if pd.notna(result.get('score_street')):
+            st.write(f"**Address Score:** {result['score_street']:.1f}%")
+            
+        if pd.notna(result.get('score_city_state_zip')):
+            st.write(f"**City/State/ZIP Score:** {result['score_city_state_zip']:.1f}%")
         
         # Dates
         if result.get('issue_date'):
@@ -574,11 +717,11 @@ def display_enhanced_search_result_detail(result: pd.Series, pharmacy_info: Dict
         if pharmacy_info.get('phone'):
             st.markdown(f"**Phone:** :blue[{pharmacy_info['phone']}]")
         
-        # Show screenshot if available
+        # Show small thumbnail if available
         if result.get('screenshot_path'):
             try:
-                st.image(result['screenshot_path'], caption="Search Screenshot", width=250)
-            except:
+                st.image(result['screenshot_path'], caption="Screenshot", width=150)
+            except Exception as e:
                 st.info("Screenshot not available")
     
     with col3:
@@ -598,25 +741,58 @@ def display_enhanced_search_result_detail(result: pd.Series, pharmacy_info: Dict
         with col3:
             if result.get('result_id'):
                 st.write(f"Result ID: {result['result_id']}")
+    
+    # Full-size screenshot at bottom for side-by-side comparison
+    if result.get('screenshot_path'):
+        with st.expander("📷 View Full Size Screenshot (for comparison with data above)", expanded=False):
+            st.markdown("**Use this to verify the search result data matches the screenshot:**")
+            try:
+                st.image(result['screenshot_path'], caption="Full Size Search Screenshot", use_container_width=True)
+            except Exception as e:
+                st.error(f"Could not load screenshot: {e}")
 
 def format_address_with_matching_parts(search_address: str, pharmacy_address: str) -> str:
     """Format address with bold parts that match the pharmacy address"""
     if search_address == 'N/A' or pharmacy_address == 'N/A':
         return search_address
     
-    # Simple word-level matching for demonstration
-    search_words = search_address.lower().replace(',', '').split()
-    pharmacy_words = pharmacy_address.lower().replace(',', '').split()
+    # Split addresses into components for better matching
+    search_parts = [part.strip() for part in search_address.split(',')]
+    pharmacy_parts = [part.strip().lower() for part in pharmacy_address.split(',')]
     
-    # Check if addresses match closely
-    matching_words = set(search_words) & set(pharmacy_words)
-    
-    if len(matching_words) >= 2:  # If at least 2 words match
-        return f":green[**{search_address}**] ✓"
-    elif len(matching_words) >= 1:  # If some words match
-        return f"**{search_address}**"
-    else:
+    if not pharmacy_parts:
         return search_address
+    
+    highlighted_parts = []
+    total_matches = 0
+    
+    for search_part in search_parts:
+        part_lower = search_part.lower().strip()
+        is_match = False
+        
+        # Check if this search part matches any pharmacy part (partial or exact)
+        for pharm_part in pharmacy_parts:
+            if pharm_part and (part_lower == pharm_part or pharm_part in part_lower or part_lower in pharm_part):
+                is_match = True
+                total_matches += 1
+                break
+        
+        if is_match:
+            highlighted_parts.append(f"**{search_part}**")
+        else:
+            highlighted_parts.append(search_part)
+    
+    result_address = ', '.join(highlighted_parts)
+    
+    # Add visual indicators based on match quality
+    if total_matches >= 3:  # Very strong match (address, city, state/zip)
+        return f":green[{result_address}] ✅"
+    elif total_matches >= 2:  # Good match (likely address + city or state)
+        return f":yellow[{result_address}] ⚠️"
+    elif total_matches >= 1:  # Some match
+        return result_address
+    else:
+        return f":red[{result_address}]"
 
 def display_detailed_validation_controls(result: pd.Series, datasets: Dict, result_idx: int) -> None:
     """Display simple toggle validation controls"""

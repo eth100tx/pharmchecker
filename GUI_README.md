@@ -24,11 +24,14 @@ The GUI will be available at `http://localhost:8501`
 - View dataset statistics and metadata
 - Real-time context display
 
-### Results Matrix
-- Comprehensive results view with filtering and sorting
-- Status classification (match/weak match/no match/no data)
-- Interactive charts and visualizations
-- CSV export functionality
+### Results Matrix ✨ **Enhanced**
+- **Accurate Record Counts**: Shows actual count of search results per pharmacy-state combination
+- **Smart Status Classification**: Distinguishes between:
+  - ⚪ **No Data Loaded**: No search record exists
+  - ⚫ **No Results Found**: Search conducted but no results found
+  - ✅ **Match/Weak Match/No Match**: With score-based classification
+- **Clean Display**: Blank cells for missing license numbers and scores (no placeholder text)
+- **Interactive filtering and sorting** with CSV export functionality
 
 ### Scoring Dashboard
 - **Real-time scoring statistics** and accuracy metrics
@@ -36,21 +39,51 @@ The GUI will be available at `http://localhost:8501`
 - Missing score identification and batch controls
 - Score distribution analysis with performance metrics
 
-### Pharmacy Details
-- Detailed pharmacy profiles with contact information
-- State-by-state license and search result breakdown
-- Address and license verification status
+### Pharmacy Details ✨ **Enhanced**
+- **Complete Pharmacy Profiles**: Name, alias, full address with suite, phone, licensed states
+- **Search State Context**: Header shows which state's results are being viewed
+- **Real Database Integration**: Live data from pharmacies table with proper schema handling
+- **State-by-state license and search result breakdown**
 
-### Search Details
-- **In-depth search result analysis** with live data
-- **Address scoring comparisons** side-by-side
-- **Automatic screenshot display** from cached images ✨
-- License validation with expiration tracking
+### Search Details ✨ **Enhanced**
+- **Complete Match Scoring**: Shows all three score components:
+  - **Overall Score**: Weighted combination (street 70% + location 30%)
+  - **Address Score**: Street address matching accuracy
+  - **City/State/ZIP Score**: Location component matching accuracy
+- **Smart Address Highlighting**: Bold formatting for matching address components in pulldowns
+- **Enhanced Pulldown Titles**: Include scores with bold formatting for >90% matches
+- **Improved Screenshot Layout**: 
+  - Small thumbnail (150px) in side column for quick reference
+  - Full-size expandable screenshot at bottom for detailed comparison
+  - Side-by-side verification workflow support
+- **Search Context Display**: Shows "Search State" field under "Search Name"
+- **Address Comparison**: Side-by-side search result vs. pharmacy reference addresses
 
 ### Validation Manager
 - Manual validation override interface
 - Audit trail and reason tracking
 - Existing validation history display
+
+## 🔧 **Recent Technical Enhancements**
+
+### Database Integration Improvements
+- **Fixed Schema Compatibility**: Corrected `zip_code` vs `zip` column name mismatch
+- **Enhanced Query Performance**: `get_search_results()` now JOINs with `match_scores` table
+- **Accurate Record Counting**: Added `_add_record_counts()` method for precise search result counts
+- **Real Data Integration**: `get_pharmacy_info()` queries live database instead of sample data
+
+### User Interface Enhancements
+- **Smart Status Distinction**: Differentiates "No Data Loaded" from "No Results Found" cases
+- **Enhanced Address Matching**: Component-based matching with visual highlighting
+- **Clean Display Standards**: Blank cells instead of placeholder text for missing data
+- **Improved Screenshot Workflow**: Repositioned for optimal data verification
+- **Complete Scoring Display**: All three score components visible in detailed view
+
+### Display Logic Improvements
+- **Context-Aware Headers**: Dynamic state information in detailed view headers
+- **Score-Based Highlighting**: Bold formatting for high-confidence matches (>90%)
+- **Component Separation**: Clear distinction between search metadata and license data
+- **Streamlit Compatibility**: Fixed deprecation warnings with updated parameters
 
 ### Image System ✨
 - **Automatic screenshot display** in search result detail views
