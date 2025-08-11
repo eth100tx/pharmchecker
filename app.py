@@ -23,6 +23,10 @@ from utils.display import (
     display_search_result_card, display_dense_results_table,
     display_row_detail_section
 )
+from utils.validation_local import (
+    load_dataset_combination, is_data_loaded, get_loaded_tags,
+    get_comprehensive_results, clear_loaded_data
+)
 from imports.validated import ValidatedImporter
 
 # Page configuration
@@ -46,6 +50,15 @@ def initialize_session_state():
         st.session_state.current_page = 'Dataset Manager'
     if 'last_query_time' not in st.session_state:
         st.session_state.last_query_time = None
+    
+    # Enhanced session state for loaded data management
+    if 'loaded_data' not in st.session_state:
+        st.session_state.loaded_data = {
+            'comprehensive_results': None,
+            'validations': {},  # Key: (pharmacy_name, state_code, license_number)
+            'loaded_tags': None,
+            'last_load_time': None
+        }
 
 # Database operations using utility functions
 def get_available_datasets() -> Dict[str, List[str]]:
@@ -62,6 +75,7 @@ def get_dataset_stats(kind: str, tag: str) -> Dict:
 def render_sidebar():
     """Render the navigation sidebar"""
     st.sidebar.title("PharmChecker")
+    st.sidebar.caption("v1.1 - Validation Debugging")
     st.sidebar.markdown("---")
     
     # Navigation
@@ -147,9 +161,38 @@ def render_sidebar():
         st.sidebar.info("Export functionality coming soon")
 
 def render_dataset_manager():
-    """Dataset selection and management interface"""
+    """Load-based dataset management interface"""
     st.header("Dataset Manager")
-    st.markdown("Select dataset combinations for analysis")
+    
+    # Show current loaded data status
+    if is_data_loaded():
+        loaded_tags = get_loaded_tags()
+        last_load_time = st.session_state.loaded_data['last_load_time']
+        
+        st.success("✅ **Data Loaded**")
+        col1, col2 = st.columns([3, 1])
+        
+        with col1:
+            st.info(f"""
+            **Loaded Dataset Combination:**
+            - **Pharmacies:** {loaded_tags['pharmacies']}
+            - **States:** {loaded_tags['states']}  
+            - **Validated:** {loaded_tags['validated'] or 'None'}
+            - **Loaded:** {last_load_time.strftime('%Y-%m-%d %H:%M:%S')}
+            """)
+            
+        with col2:
+            if st.button("🗑️ Clear Data", help="Clear loaded data from memory"):
+                clear_loaded_data()
+                st.rerun()
+    else:
+        st.warning("⚠️ **No Data Loaded**")
+        st.markdown("Select dataset combination and load data to begin analysis.")
+    
+    st.markdown("---")
+    
+    # Dataset selection for loading
+    st.subheader("Load Dataset Combination")
     
     # Get available datasets
     available_datasets = get_available_datasets()
@@ -158,88 +201,129 @@ def render_dataset_manager():
     col1, col2, col3 = st.columns(3)
     
     with col1:
-        st.subheader("Pharmacies")
+        st.markdown("**Pharmacies** (Required)")
         pharmacy_options = available_datasets.get('pharmacies', [])
         selected_pharmacy = st.selectbox(
             "Select pharmacy dataset:",
             ['None'] + pharmacy_options,
-            index=0 if not st.session_state.selected_datasets['pharmacies'] else 
-                  pharmacy_options.index(st.session_state.selected_datasets['pharmacies']) + 1
+            key="load_pharmacy_select"
         )
         if selected_pharmacy != 'None':
-            st.session_state.selected_datasets['pharmacies'] = selected_pharmacy
             stats = get_dataset_stats('pharmacies', selected_pharmacy)
-            st.info(f"Records: {stats['record_count']}")
-        else:
-            st.session_state.selected_datasets['pharmacies'] = None
+            st.info(f"📊 Records: {stats['record_count']}")
     
     with col2:
-        st.subheader("State Searches")
+        st.markdown("**State Searches** (Required)")
         states_options = available_datasets.get('states', [])
         selected_states = st.selectbox(
             "Select states dataset:",
             ['None'] + states_options,
-            index=0 if not st.session_state.selected_datasets['states'] else 
-                  states_options.index(st.session_state.selected_datasets['states']) + 1
+            key="load_states_select"
         )
         if selected_states != 'None':
-            st.session_state.selected_datasets['states'] = selected_states
             stats = get_dataset_stats('states', selected_states)
-            st.info(f"Records: {stats['record_count']}")
-        else:
-            st.session_state.selected_datasets['states'] = None
+            st.info(f"📊 Records: {stats['record_count']}")
     
     with col3:
-        st.subheader("Validated Overrides")
+        st.markdown("**Validated Overrides** (Optional)")
         validated_options = available_datasets.get('validated', [])
         selected_validated = st.selectbox(
             "Select validated dataset:",
             ['None'] + validated_options,
-            index=0 if not st.session_state.selected_datasets['validated'] else 
-                  validated_options.index(st.session_state.selected_datasets['validated']) + 1
+            key="load_validated_select"
         )
         if selected_validated != 'None':
-            st.session_state.selected_datasets['validated'] = selected_validated
             stats = get_dataset_stats('validated', selected_validated)
-            st.info(f"Records: {stats['record_count']}")
-        else:
-            st.session_state.selected_datasets['validated'] = None
+            st.info(f"📊 Records: {stats['record_count']}")
     
-    # Action buttons
+    # Load button
     st.markdown("---")
-    col1, col2, col3 = st.columns(3)
-    
-    with col1:
-        if st.button("Load Results Matrix", type="primary"):
-            if st.session_state.selected_datasets['pharmacies'] and st.session_state.selected_datasets['states']:
-                st.session_state.current_page = 'Results Matrix'
-                st.rerun()
-            else:
-                st.error("Please select at least Pharmacies and States datasets")
+    col1, col2, col3 = st.columns([1, 2, 1])
     
     with col2:
-        if st.button("Check Scoring Status"):
-            st.session_state.current_page = 'Scoring Manager'
-            st.rerun()
+        load_enabled = (selected_pharmacy != 'None' and selected_states != 'None')
+        
+        if st.button("🔄 Load Data", type="primary", disabled=not load_enabled, 
+                    help="Load selected datasets into memory for analysis"):
+            if load_enabled:
+                validated_tag = selected_validated if selected_validated != 'None' else None
+                success = load_dataset_combination(selected_pharmacy, selected_states, validated_tag)
+                
+                if success:
+                    # Update legacy session state for compatibility
+                    st.session_state.selected_datasets = {
+                        'pharmacies': selected_pharmacy,
+                        'states': selected_states,
+                        'validated': validated_tag
+                    }
+                    st.rerun()
+            else:
+                st.error("Please select both Pharmacies and States datasets")
     
-    with col3:
-        if st.button("View All Datasets"):
-            st.info("Dataset listing functionality coming soon")
+    # Quick navigation if data is loaded
+    if is_data_loaded():
+        st.markdown("---")
+        st.subheader("Quick Navigation")
+        col1, col2, col3 = st.columns(3)
+        
+        with col1:
+            if st.button("📊 Results Matrix", type="secondary"):
+                st.session_state.current_page = 'Results Matrix'
+                st.rerun()
+        
+        with col2:
+            if st.button("⚡ Scoring Manager", type="secondary"):
+                st.session_state.current_page = 'Scoring Manager'
+                st.rerun()
+                
+        with col3:
+            if st.button("✅ Validation Manager", type="secondary"):
+                st.session_state.current_page = 'Validation Manager'
+                st.rerun()
 
 def render_results_matrix():
-    """Main results matrix view"""
+    """Main results matrix view using loaded data"""
     st.header("Results Matrix")
     
-    datasets = st.session_state.selected_datasets
-    if not (datasets['pharmacies'] and datasets['states']):
-        st.warning("Please select Pharmacies and States datasets first")
+    # Check if data is loaded
+    if not is_data_loaded():
+        st.warning("⚠️ No data loaded. Please go to Dataset Manager to load data first.")
         if st.button("Go to Dataset Manager"):
             st.session_state.current_page = 'Dataset Manager'
             st.rerun()
         return
     
-    # Display current context
-    display_dataset_summary(datasets)
+    # Get loaded data
+    comprehensive_results = get_comprehensive_results()
+    loaded_tags = get_loaded_tags()
+    
+    # Ensure validation data is loaded in session state
+    # If we have loaded_tags but no validation data, re-parse it
+    if loaded_tags and len(st.session_state.loaded_data['validations']) == 0:
+        st.info("🔄 Loading validation data...")
+        try:
+            from utils.validation_local import load_dataset_combination
+            success = load_dataset_combination(
+                loaded_tags['pharmacies'],
+                loaded_tags['states'], 
+                loaded_tags['validated']
+            )
+            if success:
+                st.rerun()  # Refresh to show validation data
+        except Exception as e:
+            st.warning(f"Could not load validation data: {e}")
+    
+    # Display current context with validation count
+    validation_count = len(st.session_state.loaded_data.get('validations', {}))
+    st.info(f"**Loaded Data:** {loaded_tags['pharmacies']} + {loaded_tags['states']} + {loaded_tags['validated'] or 'None'} | **Validations:** {validation_count}")
+    
+    # Display validation warnings at the top
+    try:
+        from utils.validation_local import display_validation_warnings_section
+        display_validation_warnings_section()
+    except Exception as e:
+        # If warnings fail, just skip them silently
+        pass
     
     # Controls row
     col1, col2 = st.columns([3, 1])
@@ -248,44 +332,59 @@ def render_results_matrix():
         st.subheader("Filters")
     
     with col2:
-        debug_mode = st.checkbox("Debug Mode", False, help="Show technical fields")
+        debug_mode = st.checkbox("Debug Mode", True, help="Show technical fields and validation debugging")
+        st.session_state.debug_mode = debug_mode
     
     # Filter options
     st.markdown("---")
-    col1, col2 = st.columns(2)
+    col1, col2, col3 = st.columns(3)
+    
     with col1:
         filter_to_loaded = st.checkbox("Show only loaded states", True, 
                                      help="Only show pharmacy-state combinations where search data exists")
     
-    # Get database manager
-    db = get_database_manager()
+    with col2:
+        enable_validated = st.checkbox(
+            "Enable Validated", 
+            True,
+            help="Include validated records in results (uncheck to hide validated records)"
+        )
+        
+    with col3:
+        if st.button("🔄 Reload Data", help="Reload data from database"):
+            clear_loaded_data()
+            st.rerun()
     
-    # Use new comprehensive approach with session caching
-    cache_key = f"comprehensive_{datasets['states']}_{datasets['pharmacies']}_{datasets.get('validated', 'none')}_{filter_to_loaded}"
+    # Apply filtering
+    full_results_df = comprehensive_results.copy()
     
-    if cache_key not in st.session_state:
-        with st.spinner("Loading comprehensive results..."):
-            st.session_state[cache_key] = db.get_comprehensive_results(
-                datasets['states'],
-                datasets['pharmacies'], 
-                datasets['validated'],
-                filter_to_loaded_states=filter_to_loaded
-            )
-    
-    # Get full results from cache
-    full_results_df = st.session_state[cache_key]
+    # Filter to loaded states if requested
+    if filter_to_loaded:
+        # Get states that have actual search data
+        states_with_data = full_results_df[full_results_df['latest_result_id'].notna()]['search_state'].unique()
+        full_results_df = full_results_df[full_results_df['search_state'].isin(states_with_data)]
     
     if full_results_df.empty:
-        st.warning("No comprehensive results found for the selected datasets")
+        st.warning("No results found matching the current filters")
         return
     
-    # Aggregate for matrix display
+    # Aggregate for matrix display using local database manager
+    db = get_database_manager()
     with st.spinner("Aggregating results for matrix view..."):
         results_df = db.aggregate_for_matrix(full_results_df)
     
     if results_df.empty:
-        st.warning("No results found for the selected datasets")
+        st.warning("No aggregated results found")
         return
+    
+    # Update status buckets using local validation state
+    from utils.validation_local import calculate_status_with_local_validation
+    results_df['status_bucket'] = results_df.apply(calculate_status_with_local_validation, axis=1)
+    
+    # Apply validation filtering AFTER status calculation
+    if not enable_validated:
+        # Remove validated records from results
+        results_df = results_df[results_df['status_bucket'] != 'validated']
     
     # Get available states and statuses for filters
     available_states = sorted(results_df['search_state'].dropna().unique().tolist())
@@ -335,7 +434,7 @@ def render_results_matrix():
     if show_warnings:
         filtered_data = filtered_data[filtered_data['warnings'].notna() & (filtered_data['warnings'] != '')]
     
-    # Summary statistics (replacing charts)
+    # Summary statistics
     st.subheader("Summary Statistics")
     
     # Calculate summary stats
@@ -358,7 +457,7 @@ def render_results_matrix():
         st.subheader("Detailed View")
         # Get detail data from comprehensive results
         detail_results = db.filter_for_detail(full_results_df, selected_row['pharmacy_name'], selected_row['search_state'])
-        display_row_detail_section(selected_row, datasets, debug_mode, detail_results)
+        display_row_detail_section(selected_row, st.session_state.selected_datasets, debug_mode, detail_results)
     
     # Export functionality
     st.subheader("Export")
