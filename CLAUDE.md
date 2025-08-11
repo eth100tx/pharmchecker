@@ -143,28 +143,27 @@ python test_gui.py          # Test GUI components
 
 ### Scoring System ✨
 - **`scoring_plugin.py`**: Advanced address matching algorithm with fuzzy string matching
-- **`address_matcher.py`**: Reference implementation for comparison (archived)
 - **`test_scoring.py`**: Comprehensive scoring validation with real data
 - **`system_test.py`**: Complete end-to-end system test
 
 ### Database Management
 - **`schema.sql`**: Complete database schema with optimized merged table structure
-- **`functions.sql`**: Database functions (NOTE: Contains old schema references - see below)
-- **`functions_optimized.sql`**: Updated functions for actual merged table schema ✨
-- **`update_functions.py`**: Utility to apply optimized database functions ✨
+- **`functions_comprehensive.sql`**: Database functions for comprehensive results system ✨
 - **`setup.py`**: Automated database initialization and setup
 - **`show_status.py`**: Database status utility showing datasets and record counts
 - **`clean_search_db.py`**: Utility for cleaning search data while preserving pharmacies
 
 ### ⚠️ Important Schema Note
-**Documentation vs Reality Mismatch**: Some documentation files (including `functions.sql` and `pharmchecker-implementation-docs.md`) still reference the original separate `searches` and `search_results` tables. However, the **actual implemented database uses an optimized merged `search_results` table** that contains both search metadata and results. This optimization eliminates timing conflicts and improves performance. The working system uses `functions_optimized.sql` which correctly implements the merged schema.
+The system uses an **optimized merged `search_results` table** that contains both search metadata and results. This eliminates timing conflicts and improves performance. The current database functions in `functions_comprehensive.sql` implement this optimized schema.
 
 ### Web Interface (MVP GUI) ✨
 - **`app.py`**: Complete Streamlit MVP GUI with comprehensive functionality
 - **`utils/database.py`**: Database operations and MCP integration utilities
 - **`utils/display.py`**: UI components, charts, and formatting utilities
+- **`utils/validation_local.py`**: Session-based validation state management
 - **`test_gui.py`**: Complete GUI component test suite
 - **`GUI_README.md`**: Comprehensive GUI documentation and integration guide
+- **`GUI_implementation_guide.md`**: Complete implementation guide for developers
 
 ### Configuration and Utilities  
 - **`config.py`**: Database connection management with environment variable support
@@ -308,7 +307,7 @@ The essential PharmChecker functionality is fully implemented and tested, includ
 ### Development Workflow Improvements
 - **Streamlined Makefile**: All development commands work correctly with the current schema
 - **Setup Script Enhancements**: Includes admin user creation and proper schema validation
-- **File Cleanup**: Removed outdated migration scripts while preserving important utilities like CSV conversion tools (`tmp/convert_pharmacy_csv.py`) and comprehensive documentation (`pharmchecker-implementation-docs.md`)
+- **File Cleanup**: Removed outdated migration scripts while preserving important utilities and comprehensive documentation
 
 ### Database Architecture Optimization (Latest) ✨
 - **Comprehensive Results System**: Replaced complex aggregated matrix queries with simple comprehensive data retrieval and client-side processing
@@ -316,5 +315,5 @@ The essential PharmChecker functionality is fully implemented and tested, includ
 - **Performance Improvements**: 20x faster detail views, 67% fewer database calls, 40% code complexity reduction
 - **Enhanced Caching**: Full results cached in Streamlit session state for instant detail view filtering
 - **Backward Compatibility**: Legacy `get_results_matrix()` function maintained for compatibility
-- **Database Functions**: New `get_all_results_with_context()` provides comprehensive data without aggregation
+- **Database Functions**: `get_all_results_with_context()` provides comprehensive data without aggregation
 

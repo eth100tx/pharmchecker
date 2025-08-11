@@ -344,13 +344,10 @@ pharmchecker/
 ├── config.py                  # Configuration management
 ├── setup.py                   # Database setup script
 ├── schema.sql                 # Optimized database schema (merged tables)
-├── functions.sql              # Database functions (legacy - see note below)
-├── functions_optimized.sql    # Updated functions for merged schema ✨
-├── update_functions.py        # Database function updater ✨
+├── functions_comprehensive.sql # Database functions for comprehensive results
 ├── Makefile                   # Development commands
 ├── show_status.py             # Database status utility
 ├── clean_search_db.py         # Database cleaning utility
-├── address_matcher.py         # Reference implementation (archived)
 ├── utils/                     # GUI utilities and components ✨
 │   ├── database.py           # Database operations and MCP integration
 │   ├── display.py            # UI components and visualizations
@@ -364,11 +361,11 @@ pharmchecker/
     └── pharmacies_new.csv    # Sample pharmacy data
 ```
 
-⚠️ **Note**: `functions.sql` contains legacy schema references. The working system uses `functions_optimized.sql`.
 
 ### Database Functions
 
-- `get_results_matrix(states_tag, pharmacies_tag, validated_tag)` - Main results view
+- `get_all_results_with_context(states_tag, pharmacies_tag, validated_tag)` - Comprehensive results view
+- `get_results_matrix(states_tag, pharmacies_tag, validated_tag)` - Main results view (legacy)  
 - `find_missing_scores(states_tag, pharmacies_tag)` - Identifies scoring gaps
 
 ## Web Interface Features ✨
@@ -448,7 +445,7 @@ python test_gui.py
 - **`CLAUDE.md`**: Development guidelines and system architecture
 - **`pharmchecker-implementation-docs.md`**: High-level design documentation and original intent
 - **`GUI_README.md`**: Comprehensive GUI usage and integration guide
-- **`plan.md`**: MVP development plan and implementation status
+- **`GUI_implementation_guide.md`**: Complete GUI implementation guide for developers
 - **`SYSTEM_TEST.md`**: Detailed system testing documentation
 
 ## License

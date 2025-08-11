@@ -25,7 +25,7 @@ class PharmCheckerSetup:
         self.env_example = self.project_root / '.env.example'
         self.requirements_file = self.project_root / 'requirements.txt'
         self.schema_file = self.project_root / 'schema.sql'
-        self.functions_file = self.project_root / 'functions_optimized.sql'
+        self.functions_file = self.project_root / 'functions_comprehensive.sql'
         self.data_dir = self.project_root / 'data'
         
         self.db_config = None
@@ -199,9 +199,9 @@ class PharmCheckerSetup:
             return False
     
     def create_functions(self) -> bool:
-        """Create database functions from functions_optimized.sql"""
+        """Create database functions from functions_comprehensive.sql"""
         if not self.functions_file.exists():
-            logger.error("functions_optimized.sql not found!")
+            logger.error("functions_comprehensive.sql not found!")
             return False
         
         try:
