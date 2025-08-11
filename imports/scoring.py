@@ -64,15 +64,23 @@ class ScoringEngine(BaseImporter):
             List of (pharmacy_id, result_id) tuples needing scores
         """
         with self.conn.cursor() as cur:
+            # Get all comprehensive results for these datasets
             cur.execute("""
-                SELECT pharmacy_id, result_id 
-                FROM find_missing_scores(%s, %s)
-                LIMIT %s
-            """, (states_tag, pharmacies_tag, limit))
-            results = cur.fetchall()
+                SELECT pharmacy_id, result_id, score_overall
+                FROM get_all_results_with_context(%s, %s, NULL)
+                WHERE result_id IS NOT NULL
+            """, (states_tag, pharmacies_tag))
+            all_results = cur.fetchall()
             
-        self.logger.info(f"Found {len(results)} pharmacy/result pairs needing scores")
-        return results
+        # Filter to only those without scores
+        missing = [(row[0], row[1]) for row in all_results if row[2] is None]
+        
+        # Apply limit
+        if limit and len(missing) > limit:
+            missing = missing[:limit]
+            
+        self.logger.info(f"Found {len(missing)} pharmacy/result pairs needing scores")
+        return missing
     
     def compute_scores(self, states_tag: str, pharmacies_tag: str, 
                        batch_size: int = 200, max_pairs: Optional[int] = None) -> Dict[str, Any]:
@@ -349,10 +357,11 @@ class ScoringEngine(BaseImporter):
             
             states_id, pharmacies_id = dataset_ids
             
-            # Count total possible scores needed
+            # Count total possible scores needed using comprehensive results
             cur.execute("""
                 SELECT COUNT(*) as total_needed
-                FROM find_missing_scores(%s, %s)
+                FROM get_all_results_with_context(%s, %s, NULL)
+                WHERE result_id IS NOT NULL AND score_overall IS NULL
             """, (states_tag, pharmacies_tag))
             total_needed = cur.fetchone()[0]
             

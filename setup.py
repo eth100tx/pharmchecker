@@ -291,11 +291,11 @@ class PharmCheckerSetup:
                     SELECT routine_name 
                     FROM information_schema.routines 
                     WHERE routine_schema = 'public'
-                    AND routine_name IN ('get_results_matrix', 'find_missing_scores')
+                    AND routine_name IN ('get_all_results_with_context')
                 """)
                 functions = {row[0] for row in cur.fetchall()}
                 
-                expected_functions = {'get_results_matrix', 'find_missing_scores'}
+                expected_functions = {'get_all_results_with_context'}
                 missing_functions = expected_functions - functions
                 if missing_functions:
                     logger.error(f"Missing functions: {missing_functions}")

@@ -457,7 +457,7 @@ def display_dense_results_table(df: pd.DataFrame, debug_mode: bool) -> Optional[
         else:
             # Get the best result (highest score or first if no scores)
             if 'score_overall' in group.columns:
-                scores_filled = group['score_overall'].fillna(-1).infer_objects(copy=False)
+                scores_filled = group['score_overall'].fillna(-1)
                 best_row = group.loc[scores_filled.idxmax()]
             else:
                 best_row = group.iloc[0]
@@ -511,8 +511,6 @@ def display_dense_results_table(df: pd.DataFrame, debug_mode: bool) -> Optional[
         }
         
         if debug_mode:
-            display_row['Street Score'] = f"{row['score_street']:.1f}%" if pd.notna(row.get('score_street')) else "N/A"
-            display_row['City/State/ZIP'] = f"{row['score_city_state_zip']:.1f}%" if pd.notna(row.get('score_city_state_zip')) else "N/A"
             display_row['IDs'] = f"P:{row.get('pharmacy_id', 'N/A')} R:{row.get('result_id', 'N/A')}"
         
         display_data.append(display_row)

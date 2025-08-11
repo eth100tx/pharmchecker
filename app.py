@@ -256,6 +256,8 @@ def render_dataset_manager():
                         'states': selected_states,
                         'validated': validated_tag
                     }
+                    # Reset validation load attempt flag for new data
+                    st.session_state.validation_load_attempted = False
                     st.rerun()
             else:
                 st.error("Please select both Pharmacies and States datasets")
@@ -298,9 +300,14 @@ def render_results_matrix():
     loaded_tags = get_loaded_tags()
     
     # Ensure validation data is loaded in session state
-    # If we have loaded_tags but no validation data, re-parse it
-    if loaded_tags and len(st.session_state.loaded_data['validations']) == 0:
+    # If we have loaded_tags but no validation data, re-parse it (but only once)
+    if 'validation_load_attempted' not in st.session_state:
+        st.session_state.validation_load_attempted = False
+        
+    if (loaded_tags and len(st.session_state.loaded_data['validations']) == 0 and 
+        not st.session_state.validation_load_attempted):
         st.info("🔄 Loading validation data...")
+        st.session_state.validation_load_attempted = True
         try:
             from utils.validation_local import load_dataset_combination
             success = load_dataset_combination(

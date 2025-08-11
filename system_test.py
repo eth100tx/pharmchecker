@@ -45,6 +45,71 @@ class SystemTest:
             'success': True
         }
     
+    def aggregate_results_matrix(self, comprehensive_results: List[Dict]) -> List[Dict]:
+        """
+        Aggregate comprehensive results into matrix format for compatibility.
+        Groups by (pharmacy_name, search_state) and creates summary records.
+        """
+        # Group by (pharmacy_name, search_state)
+        grouped = {}
+        for row in comprehensive_results:
+            key = (row['pharmacy_name'], row['search_state'])
+            if key not in grouped:
+                grouped[key] = []
+            grouped[key].append(row)
+        
+        # Create matrix records
+        matrix_results = []
+        for (pharmacy_name, search_state), group in grouped.items():
+            # Take the first row for pharmacy info
+            first_row = group[0]
+            
+            # Find best match score from all results
+            scores = [r['score_overall'] for r in group if r['score_overall'] is not None]
+            best_score = max(scores) if scores else None
+            
+            # Count results
+            total_results = len([r for r in group if r['result_id'] is not None])
+            
+            # Determine status bucket based on best score and validations
+            status_bucket = 'no data'
+            if any(r['override_type'] for r in group):
+                status_bucket = 'validated'
+            elif best_score is not None:
+                if best_score >= 85:
+                    status_bucket = 'match'
+                elif best_score >= 60:
+                    status_bucket = 'weak match'
+                else:
+                    status_bucket = 'no match'
+            elif total_results > 0:
+                status_bucket = 'no match'
+            
+            # Find the result with the best score for detailed info
+            best_result = None
+            if scores:
+                best_result = max([r for r in group if r['score_overall'] is not None], key=lambda x: x['score_overall'])
+            elif group:
+                best_result = group[0]  # Take first result for license info
+                
+            matrix_results.append({
+                'pharmacy_name': pharmacy_name,
+                'search_state': search_state,
+                'score_overall': best_score,
+                'score_street': best_result['score_street'] if best_result else None,
+                'score_city_state_zip': best_result['score_city_state_zip'] if best_result else None,
+                'status_bucket': status_bucket,
+                'result_count': total_results,
+                'license_number': best_result['license_number'] if best_result else None,
+                'license_status': best_result['license_status'] if best_result else None,
+                'license_name': best_result['license_name'] if best_result else None,
+                'warnings': [],  # Placeholder for compatibility
+                'pharmacy_dataset_id': first_row['pharmacy_dataset_id'],
+                'states_dataset_id': first_row['states_dataset_id']
+            })
+        
+        return matrix_results
+    
     def log_step(self, step: str, success: bool = True, details: str = ""):
         """Log a test step"""
         step_info = {
@@ -312,11 +377,14 @@ class SystemTest:
             with psycopg2.connect(**self.db_config) as conn:
                 with conn.cursor(cursor_factory=RealDictCursor) as cur:
                     cur.execute("""
-                        SELECT * FROM get_results_matrix(%s, %s, %s)
+                        SELECT * FROM get_all_results_with_context(%s, %s, %s)
                         ORDER BY pharmacy_name, search_state
                     """, (TEST_TAG, TEST_TAG, None))
                     
-                    results = cur.fetchall()
+                    comprehensive_results = cur.fetchall()
+            
+            # Aggregate into matrix format for compatibility
+            results = self.aggregate_results_matrix(comprehensive_results)
             
             # Count how many have scores
             with_scores = len([r for r in results if r['score_overall'] is not None])
@@ -367,11 +435,16 @@ class SystemTest:
             with psycopg2.connect(**self.db_config) as conn:
                 with conn.cursor(cursor_factory=RealDictCursor) as cur:
                     cur.execute("""
-                        SELECT * FROM get_results_matrix(%s, %s, %s)
-                        ORDER BY pharmacy_name, search_state, score_overall DESC NULLS LAST
+                        SELECT * FROM get_all_results_with_context(%s, %s, %s)
+                        ORDER BY pharmacy_name, search_state
                     """, (TEST_TAG, TEST_TAG, None))
                     
-                    results = cur.fetchall()
+                    comprehensive_results = cur.fetchall()
+            
+            # Aggregate into matrix format for compatibility
+            results = self.aggregate_results_matrix(comprehensive_results)
+            # Sort by score
+            results.sort(key=lambda x: (x['pharmacy_name'], x['search_state'], x['score_overall'] or -1), reverse=True)
             
             # Count scores by status bucket
             status_counts = {}

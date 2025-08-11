@@ -289,27 +289,14 @@ class DatabaseManager:
             filter_to_loaded_states: If True, only show states with search data
         """
         
-        if filter_to_loaded_states:
-            # Only show pharmacy-state combinations where we have search data
-            sql = """
-            SELECT * FROM get_results_matrix(%s, %s, %s) 
-            WHERE search_state IN (
-                SELECT DISTINCT search_state 
-                FROM search_results sr
-                JOIN datasets d ON sr.dataset_id = d.id 
-                WHERE d.tag = %s
-            )
-            """
-            params = [states_tag, pharmacies_tag, validated_tag, states_tag]
-        else:
-            # Show all pharmacy license combinations (original behavior)
-            sql = "SELECT * FROM get_results_matrix(%s, %s, %s)"
-            params = [states_tag, pharmacies_tag, validated_tag]
+        # Use new comprehensive function
+        sql = "SELECT * FROM get_all_results_with_context(%s, %s, %s)"
+        params = [states_tag, pharmacies_tag, validated_tag]
         
         try:
-            df = self.execute_query(sql, params)
+            comprehensive_df = self.execute_query(sql, params)
             
-            if df.empty:
+            if comprehensive_df.empty:
                 # Return sample data for testing
                 sample_data = pd.DataFrame({
                     'pharmacy_id': [1, 2, 3],
@@ -324,10 +311,9 @@ class DatabaseManager:
                 })
                 return sample_data
             
-            # Add record counts by querying search_results directly
-            df = self._add_record_counts(df, states_tag)
-            
-            return df
+            # Aggregate into matrix format
+            matrix_df = self._aggregate_comprehensive_to_matrix(comprehensive_df, filter_to_loaded_states, states_tag)
+            return matrix_df
             
         except Exception as e:
             logger.error(f"Failed to get results matrix: {e}")
@@ -371,10 +357,80 @@ class DatabaseManager:
             df['record_count'] = 0
             return df
     
-    def find_missing_scores(self, states_tag: str, pharmacies_tag: str) -> pd.DataFrame:
-        """Find pharmacy/result pairs that need scoring"""
+    def _aggregate_comprehensive_to_matrix(self, comprehensive_df: pd.DataFrame, 
+                                         filter_to_loaded_states: bool = True,
+                                         states_tag: str = None) -> pd.DataFrame:
+        """Aggregate comprehensive results into matrix format"""
+        if comprehensive_df.empty:
+            return pd.DataFrame()
         
-        sql = "SELECT * FROM find_missing_scores(%s, %s)"
+        # Group by (pharmacy_name, search_state)
+        grouped = comprehensive_df.groupby(['pharmacy_name', 'search_state'])
+        
+        matrix_rows = []
+        for (pharmacy_name, search_state), group in grouped:
+            # Find best score from all results
+            scores = group[group['score_overall'].notna()]['score_overall']
+            best_score = scores.max() if len(scores) > 0 else None
+            
+            # Count results
+            total_results = len(group[group['result_id'].notna()])
+            
+            # Determine status bucket
+            status_bucket = 'no data'
+            if group['override_type'].notna().any():
+                status_bucket = 'validated'
+            elif best_score is not None:
+                if best_score >= 85:
+                    status_bucket = 'match'
+                elif best_score >= 60:
+                    status_bucket = 'weak match'
+                else:
+                    status_bucket = 'no match'
+            elif total_results > 0:
+                status_bucket = 'no match'
+            
+            # Get representative row for other fields
+            first_row = group.iloc[0]
+            best_score_row = group[group['score_overall'] == best_score].iloc[0] if best_score is not None else first_row
+            
+            matrix_rows.append({
+                'pharmacy_id': first_row['pharmacy_id'],
+                'pharmacy_name': pharmacy_name,
+                'search_state': search_state,
+                'score_overall': best_score,
+                'score_street': best_score_row['score_street'] if best_score is not None else None,
+                'score_city_state_zip': best_score_row['score_city_state_zip'] if best_score is not None else None,
+                'status_bucket': status_bucket,
+                'result_count': total_results,
+                'record_count': total_results,  # Add for compatibility
+                'license_number': best_score_row['license_number'] if pd.notna(best_score_row['license_number']) else None,
+                'license_status': best_score_row['license_status'] if pd.notna(best_score_row['license_status']) else None,
+                'warnings': [],  # Placeholder for compatibility
+                'pharmacy_dataset_id': first_row['pharmacy_dataset_id'],
+                'states_dataset_id': first_row['states_dataset_id'],
+                'validated_dataset_id': first_row['validated_dataset_id']
+            })
+        
+        matrix_df = pd.DataFrame(matrix_rows)
+        
+        # Apply filtering if requested
+        if filter_to_loaded_states and states_tag and not matrix_df.empty:
+            # Get states with actual search data
+            states_with_data = comprehensive_df[comprehensive_df['result_id'].notna()]['search_state'].unique()
+            if len(states_with_data) > 0:
+                matrix_df = matrix_df[matrix_df['search_state'].isin(states_with_data)]
+        
+        return matrix_df
+
+    def find_missing_scores(self, states_tag: str, pharmacies_tag: str) -> pd.DataFrame:
+        """Find pharmacy/result pairs that need scoring using comprehensive results"""
+        
+        sql = """
+        SELECT pharmacy_id, result_id
+        FROM get_all_results_with_context(%s, %s, NULL)
+        WHERE result_id IS NOT NULL AND score_overall IS NULL
+        """
         params = [states_tag, pharmacies_tag]
         
         try:
@@ -499,22 +555,9 @@ class DatabaseManager:
         Returns:
             DataFrame with all relevant search results and context
         """
-        if filter_to_loaded_states:
-            # Only show pharmacy-state combinations where we have search data
-            sql = """
-            SELECT * FROM get_all_results_with_context(%s, %s, %s) 
-            WHERE search_state IN (
-                SELECT DISTINCT search_state 
-                FROM search_results sr
-                JOIN datasets d ON sr.dataset_id = d.id 
-                WHERE d.tag = %s
-            )
-            """
-            params = [states_tag, pharmacies_tag, validated_tag, states_tag]
-        else:
-            # Show all pharmacy license combinations (original behavior)
-            sql = "SELECT * FROM get_all_results_with_context(%s, %s, %s)"
-            params = [states_tag, pharmacies_tag, validated_tag]
+        # Always get all results first, then filter client-side if needed
+        sql = "SELECT * FROM get_all_results_with_context(%s, %s, %s)"
+        params = [states_tag, pharmacies_tag, validated_tag]
         
         try:
             df = self.execute_query(sql, params)
@@ -526,6 +569,16 @@ class DatabaseManager:
             # Add computed fields that were previously done in SQL
             df = self._add_computed_fields(df)
             
+            # Lazy scoring trigger: automatically compute missing scores
+            df = self._trigger_lazy_scoring_if_needed(df, states_tag, pharmacies_tag)
+            
+            # Apply client-side filtering if requested
+            if filter_to_loaded_states and not df.empty:
+                # Get states with actual search data
+                states_with_data = df[df['result_id'].notna()]['search_state'].unique()
+                if len(states_with_data) > 0:
+                    df = df[df['search_state'].isin(states_with_data)]
+            
             return df
             
         except Exception as e:
@@ -534,6 +587,62 @@ class DatabaseManager:
                 return self._get_sample_comprehensive_results()
             else:
                 return pd.DataFrame()
+    
+    def _trigger_lazy_scoring_if_needed(self, df: pd.DataFrame, states_tag: str, pharmacies_tag: str) -> pd.DataFrame:
+        """Automatically trigger lazy scoring if scores are missing for this dataset combination
+        
+        Args:
+            df: Current comprehensive results
+            states_tag: States dataset tag
+            pharmacies_tag: Pharmacies dataset tag
+            
+        Returns:
+            Updated DataFrame with scores computed
+        """
+        if df.empty:
+            return df
+            
+        try:
+            # Check if there are search results without scores
+            results_with_missing_scores = df[
+                (df['result_id'].notna()) &  # Has search results
+                (df['score_overall'].isna())  # But no scores
+            ]
+            
+            if len(results_with_missing_scores) == 0:
+                logger.debug("No missing scores found - lazy scoring not needed")
+                return df
+            
+            logger.info(f"Found {len(results_with_missing_scores)} results without scores for {states_tag}+{pharmacies_tag}")
+            logger.info("Triggering lazy scoring...")
+            
+            # Import and run scoring engine
+            from imports.scoring import ScoringEngine
+            from config import get_db_config
+            
+            with ScoringEngine(get_db_config()) as engine:
+                stats = engine.compute_scores(states_tag, pharmacies_tag, max_pairs=1000)
+                logger.info(f"Lazy scoring completed: {stats}")
+            
+            # Re-query to get updated data with scores
+            logger.info("Re-querying data with computed scores...")
+            sql = "SELECT * FROM get_all_results_with_context(%s, %s, %s)"
+            params = [states_tag, pharmacies_tag, None]  # Note: not passing validated_tag to avoid recursion
+            updated_df = self.execute_query(sql, params)
+            
+            if not updated_df.empty:
+                # Add computed fields to updated data
+                updated_df = self._add_computed_fields(updated_df)
+                logger.info(f"Successfully updated data with {len(updated_df)} rows")
+                return updated_df
+            else:
+                logger.warning("Re-query after scoring returned no data")
+                return df
+                
+        except Exception as e:
+            logger.error(f"Lazy scoring failed: {e}")
+            # Return original data if scoring fails
+            return df
     
     def aggregate_for_matrix(self, full_df: pd.DataFrame) -> pd.DataFrame:
         """Client-side aggregation for matrix view from comprehensive results

@@ -53,7 +53,7 @@ def test_display_utilities():
     
     # Test status badge formatting
     badge = format_status_badge('match')
-    assert '🟢' in badge and 'Match' in badge
+    assert '✅' in badge and 'Match' in badge
     
     # Test chart creation with sample data
     sample_df = pd.DataFrame({
