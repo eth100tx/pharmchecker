@@ -62,6 +62,7 @@ The setup script will:
 - Create database and tables
 - Set up data directories
 - Run verification tests
+- Import test data (pharmacies and states_baseline) for immediate use
 
 ### 4. Development Commands
 

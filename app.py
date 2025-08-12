@@ -266,8 +266,8 @@ def render_sidebar():
         st.sidebar.success("Session cleared!")
         st.rerun()
     
-    # Debug mode controls (combines Debug Mode and Debug Info)
-    debug_mode = st.sidebar.checkbox("Debug Mode", True, help="Show technical fields and validation debugging")
+    # Debug mode controls
+    debug_mode = st.sidebar.checkbox("Debug Mode", False, help="Show technical fields and validation debugging")
     st.session_state.debug_mode = debug_mode
     
     if debug_mode:
@@ -579,7 +579,7 @@ def render_results_matrix():
     # Skip the word 'Filters' - go straight to filter controls
     
     # Get debug mode from sidebar (will be set there)
-    debug_mode = st.session_state.get('debug_mode', True)
+    debug_mode = st.session_state.get('debug_mode', False)
     
     # No additional filter options needed - keeping it simple
     
@@ -902,7 +902,7 @@ def render_search_details():
             else:
                 # Debug info
                 st.subheader(f"Search Results ({len(search_results_df)} found)")
-                if st.checkbox("Show Debug Info", False):
+                if st.session_state.get('debug_mode', False):
                     st.write("**DataFrame Info:**")
                     st.write(f"Shape: {search_results_df.shape}")
                     st.write(f"Columns: {list(search_results_df.columns)}")

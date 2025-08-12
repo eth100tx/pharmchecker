@@ -44,6 +44,7 @@ class PharmCheckerSetup:
             ("Setting up data directories", self.setup_data_directories),
             ("Creating initial admin user", self.create_admin_user),
             ("Running verification tests", self.run_verification),
+            ("Importing test data", self.import_test_data),
         ]
         
         for step_name, step_func in steps:
@@ -317,19 +318,81 @@ class PharmCheckerSetup:
             logger.error(f"Verification failed: {e}")
             return False
     
+    def import_test_data(self) -> bool:
+        """Import test data including pharmacies and states"""
+        try:
+            # Ask user if they want to import test data
+            response = input("Import test data (pharmacies and states)? (Y/n): ").strip()
+            if response.lower() in ('n', 'no'):
+                logger.info("Skipped test data import")
+                return True
+            
+            # Import pharmacies first
+            logger.info("Importing test pharmacy data...")
+            result = subprocess.run([
+                sys.executable, '-c',
+                """
+import os
+from dotenv import load_dotenv
+load_dotenv()
+from imports.pharmacies import PharmacyImporter
+importer = PharmacyImporter()
+success = importer.import_csv('data/pharmacies_new.csv', tag='test_pharmacies', created_by='setup_user', description='Test pharmacy data from setup')
+print('✅ Pharmacy import successful!' if success else '❌ Pharmacy import failed!')
+exit(0 if success else 1)
+                """
+            ], capture_output=True, text=True)
+            
+            if result.returncode != 0:
+                logger.error(f"Pharmacy import failed: {result.stderr}")
+                return False
+            
+            logger.info("✅ Pharmacy data imported successfully")
+            
+            # Import states data
+            logger.info("Importing test state search data...")
+            result = subprocess.run([
+                sys.executable, '-c',
+                """
+import os
+from dotenv import load_dotenv
+load_dotenv()
+from imports.states import StateImporter
+importer = StateImporter()
+success = importer.import_directory('data/states_baseline', tag='states_baseline', created_by='setup_user', description='Test state search data from setup')
+print('✅ States import successful!' if success else '❌ States import failed!')
+exit(0 if success else 1)
+                """
+            ], capture_output=True, text=True)
+            
+            if result.returncode != 0:
+                logger.error(f"States import failed: {result.stderr}")
+                return False
+            
+            logger.info("✅ State search data imported successfully")
+            return True
+            
+        except Exception as e:
+            logger.error(f"Failed to import test data: {e}")
+            return False
+    
     def print_next_steps(self) -> None:
         """Print next steps for the user"""
         logger.info("\n" + "="*60)
         logger.info("🎉 SETUP COMPLETE! Next steps:")
         logger.info("="*60)
-        logger.info("1. Install sample data (optional):")
-        logger.info("   python -c \"from imports.pharmacies import PharmacyImporter; print('Ready for data import')\"")
-        logger.info("")
-        logger.info("2. Run the Streamlit UI:")
+        logger.info("1. Run the Streamlit UI:")
         logger.info("   streamlit run app.py")
         logger.info("")
-        logger.info("3. Or import data programmatically:")
-        logger.info("   python -c \"from imports import *; print('Import modules ready')\"")
+        logger.info("2. Run system test to verify everything works:")
+        logger.info("   python system_test.py")
+        logger.info("")
+        logger.info("3. View database status:")
+        logger.info("   make status")
+        logger.info("")
+        logger.info("4. Import additional data:")
+        logger.info("   make import_test_states2    # Additional test states")
+        logger.info("   make dev                    # Full development data import")
         logger.info("="*60)
 
 def main():
