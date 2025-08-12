@@ -21,11 +21,9 @@ logger = logging.getLogger(__name__)
 # Import utility modules
 from utils.database import get_database_manager, query_with_cache
 from utils.display import (
-    display_dataset_summary, display_results_table, display_metrics_row,
-    create_status_distribution_chart, create_score_histogram,
-    create_export_button, format_status_badge, display_pharmacy_card,
-    display_search_result_card, display_dense_results_table,
-    display_row_detail_section
+    display_dataset_summary, display_results_table,
+    create_export_button, format_status_badge,
+    display_dense_results_table, display_row_detail_section
 )
 from utils.validation_local import (
     load_dataset_combination, is_data_loaded, get_loaded_tags,
@@ -33,7 +31,6 @@ from utils.validation_local import (
 )
 from utils.auth import get_auth_manager, get_user_context, require_auth
 from utils.session import auto_restore_dataset_selection, save_dataset_selection
-from imports.validated import ValidatedImporter
 
 # Page configuration
 st.set_page_config(
@@ -182,11 +179,7 @@ def render_sidebar():
     # Navigation at top
     pages = [
         "Dataset Manager",
-        "Results Matrix", 
-        "Scoring Manager",
-        "Pharmacy Details",
-        "Search Details",
-        "Validation Manager"
+        "Results Matrix"
     ]
     
     selected_page = st.sidebar.selectbox(
@@ -259,10 +252,17 @@ def render_sidebar():
         st.cache_data.clear()
         st.rerun()
     
-    if st.sidebar.button("Clear Session"):
+    if st.sidebar.button("Clear Session", help="Clears datasets from GUI and session history"):
         from utils.session import clear_all_session_data
         clear_all_session_data()
         st.cache_data.clear()
+        st.session_state.current_page = 'Dataset Manager'
+        # Reset selected datasets in GUI to match cleared session
+        st.session_state.selected_datasets = {
+            'pharmacies': None,
+            'states': None,
+            'validated': None
+        }
         st.sidebar.success("Session cleared!")
         st.rerun()
     
@@ -278,8 +278,6 @@ def render_sidebar():
         else:
             st.sidebar.warning("⚠️ No persistence (not authenticated)")
     
-    if st.sidebar.button("Export Current View"):
-        st.sidebar.info("Export functionality coming soon")
         
     # No dark mode toggle needed - keeping default Streamlit theme
     
@@ -301,21 +299,14 @@ def render_dataset_manager():
         last_load_time = st.session_state.loaded_data['last_load_time']
         
         st.success("✅ **Data Loaded**")
-        col1, col2 = st.columns([3, 1])
-        
-        with col1:
-            st.info(f"""
-            **Loaded Dataset Combination:**
-            - **Pharmacies:** {loaded_tags['pharmacies']}
-            - **States:** {loaded_tags['states']}  
-            - **Validated:** {loaded_tags['validated'] or 'None'}
-            - **Loaded:** {last_load_time.strftime('%Y-%m-%d %H:%M:%S')}
-            """)
+        st.info(f"""
+        **Loaded Dataset Combination:**
+        - **Pharmacies:** {loaded_tags['pharmacies']}
+        - **States:** {loaded_tags['states']}  
+        - **Validated:** {loaded_tags['validated'] or 'None'}
+        - **Loaded:** {last_load_time.strftime('%Y-%m-%d %H:%M:%S')}
+        """)
             
-        with col2:
-            if st.button("🗑️ Clear Data", help="Clear loaded data from memory"):
-                clear_loaded_data()
-                st.rerun()
     else:
         st.warning("⚠️ **No Data Loaded**")
         st.markdown("Select dataset combination and load data to begin analysis.")
@@ -447,26 +438,6 @@ def render_dataset_manager():
             else:
                 st.error("Please select both Pharmacies and States datasets")
     
-    # Quick navigation if data is loaded
-    if is_data_loaded():
-        st.markdown("---")
-        st.subheader("Quick Navigation")
-        col1, col2, col3 = st.columns(3)
-        
-        with col1:
-            if st.button("📊 Results Matrix", type="secondary"):
-                st.session_state.current_page = 'Results Matrix'
-                st.rerun()
-        
-        with col2:
-            if st.button("⚡ Scoring Manager", type="secondary"):
-                st.session_state.current_page = 'Scoring Manager'
-                st.rerun()
-                
-        with col3:
-            if st.button("✅ Validation Manager", type="secondary"):
-                st.session_state.current_page = 'Validation Manager'
-                st.rerun()
 
 def render_results_matrix():
     """Main results matrix view using loaded data"""
@@ -715,406 +686,7 @@ def render_results_matrix():
     st.subheader("Export")
     create_export_button(filtered_data, "results_matrix")
 
-def render_scoring_manager():
-    """Scoring management and status"""
-    st.header("Scoring Manager")
-    
-    datasets = st.session_state.selected_datasets
-    if not (datasets['pharmacies'] and datasets['states']):
-        st.warning("Please select Pharmacies and States datasets first")
-        return
-    
-    st.info(f"Scoring context: Pharmacies({datasets['pharmacies']}) + States({datasets['states']})")
-    
-    # Get scoring status
-    db = get_database_manager()
-    
-    with st.spinner("Loading scoring status..."):
-        missing_scores_df = db.find_missing_scores(datasets['states'], datasets['pharmacies'])
-        scoring_stats = db.get_scoring_statistics(datasets['states'], datasets['pharmacies'])
-    
-    # Scoring status
-    st.subheader("Scoring Status")
-    
-    total_scores = scoring_stats.get('total_scores', 0)
-    missing_count = len(missing_scores_df)
-    total_pairs = total_scores + missing_count
-    
-    metrics = {
-        "Total Pairs": total_pairs,
-        "Scored Pairs": total_scores,
-        "Missing Scores": missing_count
-    }
-    
-    display_metrics_row(metrics)
-    
-    # Scoring actions
-    st.subheader("Scoring Actions")
-    
-    col1, col2 = st.columns(2)
-    
-    with col1:
-        if st.button("Refresh Missing Scores", type="primary"):
-            st.cache_data.clear()
-            st.rerun()
-    
-    with col2:
-        if st.button("Compute All Missing"):
-            if missing_count > 0:
-                st.info(f"Would compute scores for {missing_count} pairs using scoring engine")
-                # This would integrate with imports/scoring.py
-            else:
-                st.success("All scores are up to date!")
-    
-    # Display missing scores if any
-    if not missing_scores_df.empty:
-        st.subheader(f"Missing Scores ({len(missing_scores_df)} pairs)")
-        st.dataframe(missing_scores_df, hide_index=True)
-    else:
-        st.success("✅ All scores computed!")
-    
-    # Scoring statistics
-    st.subheader("Scoring Statistics")
-    
-    if scoring_stats and scoring_stats.get('total_scores', 0) > 0:
-        col1, col2 = st.columns(2)
-        
-        with col1:
-            st.metric("Average Score", f"{scoring_stats.get('avg_score', 0):.1f}%")
-            
-        with col2:
-            accuracy = (scoring_stats.get('matches', 0) / scoring_stats.get('total_scores', 1)) * 100
-            st.metric("Match Rate", f"{accuracy:.1f}%")
-        
-        # Score distribution
-        distribution_data = {
-            'Classification': ['Perfect Match (≥85)', 'Weak Match (60-84)', 'No Match (<60)'],
-            'Count': [
-                scoring_stats.get('matches', 0),
-                scoring_stats.get('weak_matches', 0), 
-                scoring_stats.get('no_matches', 0)
-            ]
-        }
-        
-        distribution_df = pd.DataFrame(distribution_data)
-        distribution_df['Percentage'] = (distribution_df['Count'] / distribution_df['Count'].sum() * 100).round(1)
-        
-        st.dataframe(distribution_df, hide_index=True)
-    else:
-        st.info("No scoring statistics available. Compute some scores first.")
 
-def render_pharmacy_details():
-    """Pharmacy details and search results view"""
-    st.header("Pharmacy Details")
-    
-    datasets = st.session_state.selected_datasets
-    if not datasets['pharmacies']:
-        st.warning("Please select a Pharmacies dataset first")
-        return
-    
-    # Get available pharmacies
-    db = get_database_manager()
-    
-    try:
-        # Get pharmacy list
-        pharmacy_sql = """
-        SELECT id, name, address, city, state, zip_code, phone, state_licenses
-        FROM pharmacies p
-        JOIN datasets d ON p.dataset_id = d.id
-        WHERE d.tag = %s
-        ORDER BY name
-        """
-        
-        pharmacy_df = db.execute_query(pharmacy_sql, [datasets['pharmacies']])
-        
-        if pharmacy_df.empty:
-            st.warning("No pharmacies found in selected dataset")
-            return
-        
-        # Pharmacy selection
-        pharmacy_names = pharmacy_df['name'].tolist()
-        selected_pharmacy = st.selectbox("Select Pharmacy:", pharmacy_names)
-        
-        if selected_pharmacy:
-            # Get selected pharmacy data
-            pharmacy_data = pharmacy_df[pharmacy_df['name'] == selected_pharmacy].iloc[0].to_dict()
-            
-            # Display pharmacy card
-            display_pharmacy_card(pharmacy_data)
-            
-            # Get search results for this pharmacy
-            if datasets['states']:
-                st.subheader("Search Results by State")
-                
-                # Get states this pharmacy claims licenses in
-                try:
-                    import json
-                    licenses = pharmacy_data['state_licenses']
-                    if isinstance(licenses, str):
-                        licenses = json.loads(licenses)
-                    
-                    for state in licenses:
-                        with st.expander(f"Results for {state}", expanded=False):
-                            search_results_df = db.get_search_results(
-                                selected_pharmacy, state, datasets['states']
-                            )
-                            
-                            if not search_results_df.empty:
-                                for _, result in search_results_df.iterrows():
-                                    display_search_result_card(result.to_dict())
-                                    st.markdown("---")
-                            else:
-                                st.info(f"No search results found for {state}")
-                                
-                except Exception as e:
-                    st.error(f"Error loading search results: {e}")
-            
-    except Exception as e:
-        st.error(f"Error loading pharmacy details: {e}")
-
-def render_search_details():
-    """Search result details and comparison view"""
-    st.header("Search Details")
-    
-    datasets = st.session_state.selected_datasets
-    if not datasets['states']:
-        st.warning("Please select a States dataset first")
-        return
-    
-    # Search filters
-    col1, col2 = st.columns(2)
-    
-    with col1:
-        pharmacy_name = st.text_input("Pharmacy Name:", placeholder="Enter pharmacy name")
-    
-    with col2:
-        search_state = st.selectbox("State:", ["FL", "PA", "CA", "NY", "TX", "AL", "AZ"])
-    
-    if pharmacy_name and search_state:
-        db = get_database_manager()
-        
-        try:
-            # Get search results
-            search_results_df = db.get_search_results(pharmacy_name, search_state, datasets['states'])
-            
-            if search_results_df.empty:
-                st.warning(f"No search results found for {pharmacy_name} in {search_state}")
-            else:
-                # Debug info
-                st.subheader(f"Search Results ({len(search_results_df)} found)")
-                if st.session_state.get('debug_mode', False):
-                    st.write("**DataFrame Info:**")
-                    st.write(f"Shape: {search_results_df.shape}")
-                    st.write(f"Columns: {list(search_results_df.columns)}")
-                    st.write("**License Numbers:**")
-                    st.write(search_results_df['license_number'].tolist())
-                    st.write("**Unique License Numbers:**")
-                    st.write(search_results_df['license_number'].unique().tolist())
-                
-                # Remove potential duplicates based on license_number and id
-                search_results_df = search_results_df.drop_duplicates(subset=['id'])
-                st.caption(f"After deduplication: {len(search_results_df)} results")
-                
-                for i, (_, result) in enumerate(search_results_df.iterrows()):
-                    # More descriptive expander label
-                    license_num = result.get('license_number', 'No License')
-                    license_name = result.get('license_name', 'Unknown')
-                    result_label = f"Result {i+1}: {license_num} - {license_name}"
-                    
-                    with st.expander(result_label, expanded=False): 
-                        col1, col2 = st.columns([2, 1])
-                        
-                        with col1:
-                            display_search_result_card(result.to_dict())
-                        
-                        with col2:
-                            # Show scoring info if available
-                            if datasets['pharmacies']:
-                                scoring_sql = """
-                                SELECT ms.score_overall, ms.score_street, ms.score_city_state_zip
-                                FROM match_scores ms
-                                JOIN pharmacies p ON ms.pharmacy_id = p.id  
-                                JOIN datasets pd ON p.dataset_id = pd.id
-                                JOIN datasets sd ON ms.states_dataset_id = sd.id
-                                WHERE p.name = %s AND ms.result_id = %s 
-                                  AND pd.tag = %s AND sd.tag = %s
-                                """
-                                
-                                score_df = db.execute_query(scoring_sql, [
-                                    pharmacy_name, result['id'], 
-                                    datasets['pharmacies'], datasets['states']
-                                ])
-                                
-                                if not score_df.empty:
-                                    score_data = score_df.iloc[0]
-                                    st.write("**Address Matching Scores:**")
-                                    st.write(f"Overall: {score_data['score_overall']:.1f}%")
-                                    st.write(f"Street: {score_data['score_street']:.1f}%")
-                                    st.write(f"City/State/ZIP: {score_data['score_city_state_zip']:.1f}%")
-                                else:
-                                    st.info("No scoring data available")
-                        
-                        st.markdown("---")
-                        
-        except Exception as e:
-            st.error(f"Error loading search details: {e}")
-
-def render_validation_manager():
-    """Validation override management"""
-    st.header("Validation Manager")
-    
-    st.info("Manual validation override functionality")
-    
-    # Quick validation form
-    with st.form("validation_form"):
-        st.subheader("Create Validation Override")
-        
-        col1, col2 = st.columns(2)
-        
-        with col1:
-            pharmacy_name = st.text_input("Pharmacy Name")
-            state_code = st.selectbox("State", ["FL", "PA", "CA", "NY", "TX"])
-            override_type = st.selectbox("Override Type", ["present", "empty"])
-        
-        with col2:
-            license_number = st.text_input("License Number (if present)")
-            reason = st.text_area("Validation Reason")
-        
-        submitted = st.form_submit_button("Create Override")
-        
-        if submitted:
-            if pharmacy_name and state_code and override_type and reason:
-                try:
-                    # Get current datasets
-                    datasets = st.session_state.selected_datasets
-                    
-                    with ValidatedImporter() as importer:
-                        # Determine dataset to use
-                        validated_tag = datasets.get('validated')
-                        if not validated_tag:
-                            # Create new validation dataset
-                            validated_tag = f"validation_{datetime.now().strftime('%Y%m%d_%H%M%S')}"
-                            dataset_id = importer.create_dataset(
-                                'validated',
-                                validated_tag,
-                                f"GUI-created validation dataset",
-                                'gui_user'
-                            )
-                            st.info(f"✨ Created new validation dataset: {validated_tag}")
-                            # Update session state
-                            st.session_state.selected_datasets['validated'] = validated_tag
-                            # Clear cache to refresh dataset lists
-                            if hasattr(st, 'cache_data'):
-                                st.cache_data.clear()
-                        else:
-                            # Get existing dataset ID
-                            with importer.conn.cursor() as cur:
-                                cur.execute("SELECT id FROM datasets WHERE kind = 'validated' AND tag = %s", [validated_tag])
-                                result = cur.fetchone()
-                                if result:
-                                    dataset_id = result[0]
-                                else:
-                                    st.error(f"Validation dataset '{validated_tag}' not found")
-                                    return
-                        
-                        # Create validation record
-                        success = importer.create_validation_record(
-                            dataset_id=dataset_id,
-                            pharmacy_name=pharmacy_name,
-                            state_code=state_code,
-                            license_number=license_number if override_type == 'present' else '',
-                            override_type=override_type,
-                            reason=reason,
-                            validated_by='gui_user'
-                        )
-                        
-                        if success:
-                            st.success(f"✅ Created {override_type} validation for {pharmacy_name} in {state_code}")
-                        else:
-                            st.error("Failed to create validation record")
-                            
-                except Exception as e:
-                    st.error(f"Error creating validation: {e}")
-            else:
-                st.error("Please fill in all required fields")
-    
-    # Show existing validation overrides
-    datasets = st.session_state.selected_datasets
-    if datasets['validated']:
-        st.subheader("Existing Validation Overrides")
-        
-        db = get_database_manager()
-        try:
-            # Get validation overrides with key fields for comparison
-            overrides_sql = """
-            SELECT vo.id, vo.pharmacy_name, vo.state_code, vo.override_type, vo.license_number,
-                   vo.license_status, vo.address, vo.city, vo.state, vo.zip, vo.expiration_date,
-                   vo.reason, vo.validated_by, vo.validated_at
-            FROM validated_overrides vo
-            JOIN datasets d ON vo.dataset_id = d.id
-            WHERE d.tag = %s
-            ORDER BY validated_at DESC
-            """
-            
-            overrides_df = db.execute_query(overrides_sql, [datasets['validated']])
-            
-            if not overrides_df.empty:
-                st.write(f"**{len(overrides_df)} validation overrides found:**")
-                
-                # Show compact table with essential fields including record ID
-                display_columns = ['id', 'pharmacy_name', 'state_code', 'override_type', 'license_number', 'validated_at']
-                available_columns = [col for col in display_columns if col in overrides_df.columns]
-                compact_df = overrides_df[available_columns].copy()
-                st.dataframe(compact_df, hide_index=True)
-                
-                # Show comprehensive validation data from database JOIN
-                st.subheader("Comprehensive Results with Validation Data")
-                
-                if datasets.get('pharmacies') and datasets.get('states'):
-                    comprehensive_sql = """
-                    SELECT pharmacy_id, pharmacy_name, search_state, result_id, license_number,
-                           override_type, validated_license, score_overall, result_status
-                    FROM get_all_results_with_context(%s, %s, %s)
-                    WHERE override_type IS NOT NULL
-                    ORDER BY pharmacy_name, search_state
-                    """
-                    
-                    try:
-                        comprehensive_df = db.execute_query(comprehensive_sql, [datasets['states'], datasets['pharmacies'], datasets['validated']])
-                        
-                        if not comprehensive_df.empty:
-                            st.write(f"**{len(comprehensive_df)} records with validation data from JOIN:**")
-                            st.dataframe(comprehensive_df, hide_index=True)
-                        else:
-                            st.info("No records found with validation data in comprehensive results")
-                            
-                    except Exception as e:
-                        st.error(f"Error loading comprehensive validation data: {e}")
-                        
-            else:
-                st.info("No validation overrides found in database")
-                
-        except Exception as e:
-            st.error(f"Error loading validation overrides from database: {e}")
-            
-        # Show validation consistency check
-        if datasets.get('pharmacies') and datasets.get('states'):
-            st.subheader("Validation Consistency Check")
-            
-            try:
-                consistency_sql = "SELECT * FROM check_validation_consistency(%s, %s, %s)"
-                consistency_df = db.execute_query(consistency_sql, [datasets['states'], datasets['pharmacies'], datasets['validated']])
-                
-                if not consistency_df.empty:
-                    st.warning(f"**{len(consistency_df)} validation consistency issues found:**")
-                    st.dataframe(consistency_df, hide_index=True)
-                else:
-                    st.success("✅ No validation consistency issues found")
-                    
-            except Exception as e:
-                st.error(f"Error running validation consistency check: {e}")
-    else:
-        st.info("Select a Validated dataset to view existing overrides")
 
 # Main application
 def main():
@@ -1131,14 +703,6 @@ def main():
         render_dataset_manager()
     elif current_page == "Results Matrix":
         render_results_matrix()
-    elif current_page == "Scoring Manager":
-        render_scoring_manager()
-    elif current_page == "Pharmacy Details":
-        render_pharmacy_details()
-    elif current_page == "Search Details":
-        render_search_details()
-    elif current_page == "Validation Manager":
-        render_validation_manager()
     
     # Footer
     st.markdown("---")

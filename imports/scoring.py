@@ -142,8 +142,6 @@ class ScoringEngine(BaseImporter):
                     self._upsert_scores(batch_scores)
                     stats['scores_computed'] += len(batch_scores)
                     self.logger.info(f"Batch {batch_num}: computed {len(batch_scores)} scores")
-                else:
-                    self.logger.warning(f"Batch {batch_num}: no valid scores computed")
                 
                 stats['batches_processed'] += 1
                 
@@ -200,7 +198,6 @@ class ScoringEngine(BaseImporter):
                 # Get the specific result to score
                 result = self._get_single_result(result_id)
                 if not result:
-                    self.logger.warning(f"No result found for result_id {result_id}")
                     continue
                 
                 # Create state address from the result
