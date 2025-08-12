@@ -517,3 +517,208 @@ with importer.conn.cursor() as cur:
 ```
 
 This implementation experience demonstrates the importance of comprehensive testing, proper transaction handling, and careful attention to data model semantics in validation systems.
+
+---
+
+## 2024 GUI Simplification Implementation
+
+### System Architecture Changes
+
+Following validation system simplification in 2024, the architecture was redesigned per `validation_internal_dataflow.md`:
+
+#### Simplified Session State Structure
+```python
+# Before: Complex validation cache with state synchronization
+# After: Simple DataFrames cached until reload
+st.session_state.loaded_data = {
+    'comprehensive_results': pd.DataFrame,  # Search results + pharmacies
+    'pharmacies_data': pd.DataFrame,        # Pharmacy records  
+    'validations_data': pd.DataFrame,       # Validation overrides
+    'loaded_tags': {...},
+    'last_load_time': datetime
+}
+```
+
+#### Single Validation Check Function
+```python
+def is_validated(pharmacy_name: str, state_code: str, license_number: str = '') -> bool:
+    """Simple validation check using cached validation data"""
+    validations_data = st.session_state.loaded_data.get('validations_data')
+    if validations_data is None or validations_data.empty:
+        return False
+    
+    # Check cached validation data directly
+    if license_number:  # Present validation
+        matches = validations_data[
+            (validations_data['pharmacy_name'] == pharmacy_name) &
+            (validations_data['state_code'] == state_code) &
+            (validations_data['license_number'] == license_number)
+        ]
+    else:  # Empty validation  
+        matches = validations_data[
+            (validations_data['pharmacy_name'] == pharmacy_name) &
+            (validations_data['state_code'] == search_state) &
+            (validations_data['license_number'].isna())
+        ]
+    
+    return not matches.empty
+```
+
+#### Simplified Status Calculation
+```python
+def calculate_status_simple(row):
+    """Single status calculation function - prioritizes validation over score"""
+    pharmacy_name = row.get('pharmacy_name')
+    search_state = row.get('search_state')
+    license_number = row.get('license_number', '') or ''
+    
+    # Check if validated using cached data (HIGHEST PRIORITY)
+    if is_validated(pharmacy_name, search_state, license_number) or \
+       is_validated(pharmacy_name, search_state, ''):  # Check empty validation too
+        return 'validated'
+    
+    # Fall back to score-based status
+    score = row.get('score_overall')
+    if pd.isna(score): return 'no data'
+    elif score >= 85: return 'match'
+    elif score >= 60: return 'weak match'  
+    else: return 'no match'
+```
+
+### Enhanced Warning System Implementation (2024)
+
+#### Comprehensive Field-Level Change Detection
+
+The warning system was enhanced to provide detailed field-by-field comparison:
+
+**Database Integration**:
+```python
+def _calculate_warnings(self, row, full_df: pd.DataFrame) -> List[str]:
+    """Calculate warnings using cached validation data"""
+    # Access validation data from session state
+    validations_data = st.session_state.loaded_data.get('validations_data')
+    
+    # Find matching validation record
+    validation_match = validations_data[
+        (validations_data['pharmacy_name'] == pharmacy_name) &
+        (validations_data['state_code'] == search_state) &
+        (validations_data['license_number'] == license_number)
+    ]
+    
+    # Compare snapshot vs current data
+    field_comparisons = [
+        ('license_status', 'license_status'),
+        ('address', 'result_address'),
+        ('city', 'result_city'), 
+        ('state', 'result_state'),
+        ('zip', 'result_zip'),
+        ('expiration_date', 'expiration_date')
+    ]
+    
+    changed_fields = []
+    for validation_field, current_field in field_comparisons:
+        snapshot_value = validation_record.get(validation_field)
+        current_value = row.get(current_field)
+        
+        if str(snapshot_value).strip() != str(current_value).strip():
+            changed_fields.append(validation_field)
+    
+    if changed_fields:
+        return [f'Validated data changed: {", ".join(changed_fields)}']
+```
+
+#### Compact GUI Warning Display
+
+**Integrated into Loaded Data Info Box**:
+```
+Loaded Data: test_pharmacies + states_baseline + validation_20250811_154105 | Validations: 3 | ⚠️ 1 Warnings
+```
+
+**Yellow Warning Panels with Expandable Details**:
+```
+⚠️ Belmar (PA) - Validation data changed
+📋 Show details for Belmar PA NP002169
+
+Field Changes Detected:
+
+Address:
+🕒 Validated: 2501 LAKEPOINTE PARKWAY    🔍 Current: 2500 LAKEPOINTE PARKWAY
+
+Action Required: Review current search results and update validation if changes are correct, 
+or investigate if data changed unexpectedly.
+```
+
+#### Real-World Example: Address Change Detection
+
+**Actual Implementation Test Case**:
+- **Pharmacy**: Belmar  
+- **State**: PA
+- **License**: NP002169
+- **Detected Change**: Address "2501 LAKEPOINTE PARKWAY" → "2500 LAKEPOINTE PARKWAY"
+- **Warning Generated**: "Validated data changed: address"
+- **GUI Display**: Side-by-side comparison showing exact difference
+
+### GUI Simplification Benefits Achieved
+
+#### 1. Eliminated Complex State Management
+- ❌ Removed: Complex validation cache with synchronization
+- ❌ Removed: Multiple status calculation functions  
+- ❌ Removed: Warning indicator icons on validation badges
+- ✅ Added: Simple cached DataFrames until reload
+- ✅ Added: Single source of truth (database)
+
+#### 2. Improved User Experience
+- **Results Matrix**: Shows validated status instead of percentage scores for validated records
+- **Detail View Titles**: "Result 2: NP000382 - BELMAR PHARMACY 🔵 Validated" instead of "(26.1% match)"
+- **Single Validation Toggle**: One "✅ Validate" checkbox instead of separate "Validated" and "Validated as Empty" options
+- **Auto-Navigation**: Automatically go to Results Matrix after loading data
+- **Smart Expanders**: Single records auto-open, multiple records stay closed for selection
+
+#### 3. Validation Priority Logic
+**Matrix Aggregation Priority (Fixed)**:
+```python
+# Priority 1: Look for validated record first (HIGHEST PRIORITY)
+for idx, row in group.iterrows():
+    license_number = row.get('license_number', '') or ''
+    if is_validated(pharmacy_name, search_state, license_number):
+        validated_row = row
+        break
+
+# Priority 2: Best score (if no validation)
+if validated_row is None:
+    best_row = group.loc[scores_filled.idxmax()]
+```
+
+### Updated Warning Categories (2024)
+
+#### Category 1: Data Changed Since Validation
+**Trigger**: Validation snapshot differs from current search results  
+**Display**: `⚠️ Belmar (PA) - Validation data changed`  
+**Details**: Field-by-field comparison showing exact changes  
+**Action**: Review and re-validate if changes are correct
+
+#### Category 2: Empty Validation but Results Found  
+**Trigger**: `override_type = "empty"` but search results now exist  
+**Display**: `⚠️ Pharmacy (State) - Validated empty but results now exist`  
+**Action**: Update validation since data situation has changed
+
+#### Category 3: Present Validation but Results Missing
+**Trigger**: `override_type = "present"` but no search results found  
+**Display**: `⚠️ Pharmacy (State) - Validated present but result not found`  
+**Action**: Check if license was revoked or moved
+
+### Implementation Verification
+
+**Test Case: Address Change Detection**
+```
+🔍 Warning check for: Belmar PA NP002169
+  📋 Validation data loaded: 3 records
+  🔍 Validation matches found: 1
+  ✅ Found validation record: present
+  🔍 Checking field changes for present validation...
+    🔍 address: '2501 LAKEPOINTE PARKWAY' vs '2500 LAKEPOINTE PARKWAY'
+      ⚠️ CHANGE DETECTED: '2501 LAKEPOINTE PARKWAY' != '2500 LAKEPOINTE PARKWAY'
+  ⚠️ WARNING: Validated data changed: address
+```
+
+This comprehensive implementation provides robust validation warnings with precise field-level change detection while maintaining a clean, simplified user interface focused on actionable information.
