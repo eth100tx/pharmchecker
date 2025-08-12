@@ -1,454 +1,205 @@
-# PharmChecker 🏥
+# PharmChecker 💊
 
-PharmChecker is a lightweight internal tool for verifying pharmacy licenses across U.S. states through manual review of automated search results.
+A pharmacy license verification system that imports search results from state boards, automatically scores address matches, and provides a web interface for manual review and validation.
 
-## Features
+## Overview
 
-- **Versioned Datasets**: Import and combine pharmacy, state search, and validation data in any order
-- **Optimized Database**: Merged table structure with automatic deduplication
-- **Lazy Scoring**: Address match scores computed on-demand when needed ✅
-- **Multi-User Support**: Multiple users can work with different dataset combinations
-- **Streamlit UI**: Complete web interface for reviewing results and creating validations ✨
-- **Screenshot Integration**: Store and display state board search screenshots
-- **Flexible Storage**: Local filesystem or Supabase storage support
+PharmChecker streamlines pharmacy license verification across multiple U.S. states by:
 
-## Implementation Status
+- **Importing** pharmacy data (CSV) and state board search results (JSON)
+- **Scoring** addresses automatically using fuzzy matching algorithms  
+- **Reviewing** results through an interactive Streamlit web dashboard
+- **Validating** findings manually with audit trail support
+- **Exporting** verified results for compliance reporting
 
-### 🎉 COMPLETE SYSTEM WITH MVP GUI + DATABASE INTEGRATION!
+**Key Features:** Dataset versioning, lazy scoring computation, multi-user sessions, natural key linking (no hardcoded IDs), comprehensive validation system with overrides.
 
-✅ **COMPLETED**: Core data infrastructure with optimized database schema  
-✅ **COMPLETED**: Import system for pharmacies and state search results  
-✅ **COMPLETED**: Screenshot handling and metadata management  
-✅ **COMPLETED**: Address scoring engine with 96.5% accuracy for perfect matches ✨
-✅ **COMPLETED**: Lazy scoring system with efficient batch processing ✨
-✅ **COMPLETED**: End-to-end system testing with full validation ✨
-✅ **COMPLETED**: Development tools and repository organization  
-✅ **COMPLETED**: **MVP Streamlit GUI** with comprehensive web interface ✨
-✅ **COMPLETED**: **Real database integration** - GUI connects to PostgreSQL ✨🎉
-✅ **COMPLETED**: **Results matrix filtering** - Shows only loaded states by default ✨
-✅ **COMPLETED**: **Duplicate display fix** - Clean search results without image JOIN issues ✨
+## Architecture Overview
 
-📋 **PENDING**: Images table schema fix for proper screenshot display
-📋 **OPTIONAL**: Validated overrides importer (framework ready)
+```
+CSV/JSON Files → Import System → PostgreSQL Database → Scoring Engine → Web Interface
+                                       ↓
+                              Versioned Datasets + Screenshots + Validations
+```
 
-**System Status**: ✅ Production ready - complete system with real database integration
+- **Database-first design** with PostgreSQL storing all datasets and computed scores
+- **Lazy scoring system** computes address matches only when needed
+- **Multi-user support** with session management and authentication
+- **Natural key linking** using pharmacy names/license numbers (not internal IDs)
 
 ## Quick Start
 
-### 1. Prerequisites
-
+### Prerequisites
+- PostgreSQL 13+ with `pg_trgm` extension
 - Python 3.8+
-- PostgreSQL 13+ (with trigram extension support)
-- Git
+- 2GB free disk space for data and screenshots
 
-### 2. Install
+### Installation
 
 ```bash
-git clone <your-repo-url>
+# 1. Clone repository
+git clone [repository-url]
 cd pharmchecker
+
+# 2. Install dependencies  
 pip install -r requirements.txt
-```
 
-### 3. Setup
+# 3. Configure database
+cp .env.example .env
+# Edit .env with your PostgreSQL credentials:
+#   DB_HOST, DB_PORT, DB_NAME, DB_USER, DB_PASSWORD
 
-```bash
-# Run the setup script - it will guide you through configuration
+# 4. Initialize database
 python setup.py
-```
 
-The setup script will:
-- Check for `.env` file (create from `.env.example` if needed)
-- Install Python dependencies  
-- Create database and tables
-- Set up data directories
-- Run verification tests
-- Import test data (pharmacies and states_baseline) for immediate use
-
-### 4. Development Commands
-
-Use the convenient Makefile commands for development:
-
-```bash
-# Quick database status check
-make status
-
-# Clean and import test data (with image caching)
-make clean_states import_test_states
-
-# Full development workflow  
-make dev  # Imports pharmacies + both state datasets + caches images
-
-# Database management
-make clean_all    # Full reset
-make setup       # Initialize database
-
-# System testing
-python system_test.py       # Complete end-to-end system test
-python test_scoring.py      # Address scoring validation
-python scoring_plugin.py    # Standalone scoring algorithm test
-```
-
-### 5. Test the System
-
-Run the complete end-to-end test to verify everything works:
-
-```bash
+# 5. Run system test to verify installation
 python system_test.py
 ```
 
-**Expected Output**: ✅ PASS with perfect score accuracy validation
-
-### 6. Run the Web Application ✨
+### Launch Application
 
 ```bash
-# Run the comprehensive MVP GUI with real database
+# Import sample data
+make dev  # Imports test pharmacies and state search results
+
+# Start web interface
 streamlit run app.py
-
-# Test the GUI components
-python test_gui.py
+# Opens at http://localhost:8501
 ```
 
-Access the web interface at `http://localhost:8501` with **enhanced** features:
-- **Dataset Management**: Interactive selection with real data counts and loaded states
-- **Results Matrix**: ✨ **Enhanced with accurate record counts, smart status distinction (No Data Loaded vs No Results Found), clean blank display for missing data**
-- **Scoring Dashboard**: Real-time statistics and controls with complete match score breakdown
-- **Detail Views**: ✨ **Enhanced with complete pharmacy profiles, search state context, all three score components (Overall/Address/City-State-ZIP), smart address highlighting, and optimized screenshot workflow**
-- **Validation Manager**: Manual override interface with audit trail
+The web dashboard includes:
+- **Dataset Selection** - Load pharmacy, state search, and validation datasets
+- **Results Matrix** - Review all pharmacy-state combinations with scores
+- **Detail Views** - Examine individual search results and screenshots  
+- **Validation Tools** - Mark results as verified with reasons
+- **Export Functions** - Download results as CSV for reporting
 
-**Current Status**: ✅ **Production-ready with comprehensive enhancements and real database integration**
-
-## Data Import
-
-### Import Pharmacies
-
-```python
-from imports.pharmacies import PharmacyImporter
-from config import get_db_config
-
-with PharmacyImporter(get_db_config()) as importer:
-    success = importer.import_csv(
-        filepath='data/pharmacies.csv',
-        tag='2024-01-15',
-        created_by='admin',
-        description='Initial pharmacy dataset'
-    )
-```
-
-### Import State Search Results  
-
-```python
-from imports.states import StateImporter
-
-with StateImporter() as importer:
-    # Import directory of JSON files with automatic screenshot handling
-    success = importer.import_directory(
-        directory_path='data/states_baseline', 
-        tag='states_baseline',
-        created_by='admin',
-        description='Baseline state search data'
-    )
-```
-
-### Import Validated Overrides (Coming Soon)
-
-```python
-from imports.validated import ValidatedImporter
-
-with ValidatedImporter() as importer:
-    success = importer.import_csv(
-        filepath='data/validations.csv',
-        tag='2024-01-15', 
-        created_by='admin'
-    )
-```
-
-### Compute Address Scores
-
-```python
-from imports.scoring import ScoringEngine
-from config import get_db_config
-
-with ScoringEngine(get_db_config()) as engine:
-    # Compute all missing scores for dataset combination
-    stats = engine.compute_scores('states_baseline', 'pharmacies_2024')
-    print(f"Computed {stats['scores_computed']} scores")
-    
-    # Get scoring statistics
-    summary = engine.get_scoring_stats('states_baseline', 'pharmacies_2024')
-    print(f"Average score: {summary['score_distribution']['avg_score']:.1f}")
-```
-
-### Query Results Matrix
-
-```python
-from config import get_db_config
-from mcp__postgres_prod__query import query
-
-results = query("""
-    SELECT * FROM get_results_matrix('states_baseline', 'pharmacies_2024', NULL)
-    WHERE status_bucket = 'match'
-    ORDER BY score_overall DESC
-""")
-```
-
-*Note: ValidatedImporter implementation is optional - deferred as core system is complete.*
-
-## Data Formats
-
-### Pharmacy CSV Format
-
-```csv
-name,alias,address,suite,city,state,zip,state_licenses,npi_number
-Empower Pharmacy,Empower,123 Main St,Suite 100,Houston,TX,77001,"[""TX"",""FL"",""CA""]",1234567890
-```
-
-Required columns: `name`, `state_licenses`
-
-### State Search JSON Format
-
-Individual JSON files per search (e.g., `Belmar_01_parse.json`):
-
-```json
-{
-  "search_name": "Belmar Pharmacy",
-  "search_state": "FL",
-  "search_ts": "2024-08-05T14:30:22.123Z",
-  "result_status": "results_found",
-  "license_number": "PH9876",
-  "license_status": "Active",  
-  "license_name": "Belmar Compounding Pharmacy",
-  "address": "8280 NORTHLAKE BLVD",
-  "city": "WEST PALM BEACH",
-  "state": "FL",
-  "zip": "33409",
-  "issue_date": "2015-03-01",
-  "expiration_date": "2025-02-28",
-  "screenshot_path": "data/states_baseline/FL/Belmar_01.png"
-}
-```
-
-For empty results: `Pharmacy_no_results_parse.json` with `"result_status": "no_results_found"`
-
-### Validation Override CSV Format
-
-```csv
-pharmacy_name,state_code,license_number,override_type,reason,validated_by
-Empower Pharmacy,TX,12345,present,Verified active license,admin
-MedPoint Compounding,FL,,empty,No FL license found,admin
-```
-
-## Image System ✨
-
-PharmChecker automatically handles screenshot storage and display with an optimized caching system:
-
-### Image Caching Architecture
-- **Organized Storage**: `image_cache/states_baseline/FL/Belmar_01.20250803_1403.png`
-- **Timestamped Filenames**: Ensure uniqueness and prevent overwrites
-- **Smart Deduplication**: Multiple search results share the same cached image file
-- **1:1:1 Relationship**: Each search result links to exactly one image record and cached file
-
-### Storage Efficiency
-- **No Duplicates**: Timestamp-based names eliminate redundant storage
-- **Shared Images**: Multiple search results from the same file share one cached image
-- **Cloud Ready**: Organized paths support Supabase Storage upload
-- **Automatic Cleanup**: `make clean_states` removes both database records and cached files
-
-### Image Display
-- **Automatic Integration**: Screenshots appear in search result detail views
-- **Cached Performance**: Images served from local `image_cache/` directory
-- **Fallback Handling**: Graceful degradation when images are unavailable
-- **Full Resolution**: Original screenshot quality maintained
-
-## Scoring System ✅
-
-PharmChecker uses advanced address matching with **automatic lazy scoring**:
-
-- **Street Score (70% weight)**: Fuzzy matching using RapidFuzz with abbreviation normalization
-- **City/State/ZIP Score (30% weight)**: Exact matching of location components  
-- **Overall Score**: Weighted combination, scaled 0-100
-- **Lazy Scoring**: Automatically triggered when dataset combinations are first accessed ✨
-
-### Address Normalization
-- Street types: St → Street, Ave → Avenue, Blvd → Boulevard
-- Directions: N → North, SE → Southeast  
-- States: Florida → FL
-- ZIP codes: First 5 digits only
-
-### Status Classification
-- **Match**: Score ≥ 85 (Perfect matches: 96.5%)
-- **Weak Match**: Score 60-84 (Similar addresses: 66.5%)
-- **No Match**: Score < 60 (Different addresses: 39.4%)  
-- **No Data**: No search conducted or no results found
-
-**Validated Accuracy**: 100% correct classification in system tests
-
-## Architecture
-
-### Core Components
-
-1. **PostgreSQL Database** - Stores versioned datasets and computed scores
-   - **Optimized Schema**: Merged search_results table eliminates timing conflicts
-   - **Automatic Deduplication**: ON CONFLICT handling for data integrity
-2. **Import Scripts** - Load different data types with validation and error recovery
-3. **Scoring Engine** - Computes address match scores on-demand with 96.5% accuracy ✅
-4. **Streamlit UI** - Review interface with authentication *(optional)*
-5. **Storage Layer** - Local filesystem or cloud storage for screenshots
-
-### Key Design Principles
-
-- **Dataset Independence**: Data can be imported in any order
-- **Natural Key Linking**: Uses pharmacy names/license numbers vs internal IDs  
-- **Lazy Scoring**: Only computes scores when needed for specific dataset combinations
-- **Validation Snapshots**: Captures complete search result state during validation
-
-## Configuration
-
-### Database Configuration (Required)
-The PharmChecker application uses **standard PostgreSQL connections** via environment variables.
-
-Set these in `.env`:
-
-```bash
-# Database (Required - No fallback data in operational system)
-DB_HOST=localhost
-DB_PORT=5432  
-DB_NAME=pharmchecker
-DB_USER=postgres
-DB_PASSWORD=your_password
-
-# Storage 
-STORAGE_TYPE=local  # or 'supabase'
-DATA_DIR=data
-
-# Streamlit
-STREAMLIT_PORT=8501
-```
-
-**Important**: The operational system requires a live database connection. No hardcoded or sample data is used in production. Ensure your PostgreSQL database is properly configured and accessible.
-
-## Development
-
-### Project Structure
+## Project Structure
 
 ```
 pharmchecker/
-├── imports/                    # Data import modules
-│   ├── base.py                # Base importer class with batch operations  
-│   ├── pharmacies.py          # Pharmacy CSV importer
-│   ├── states.py              # State search JSON importer (with deduplication)
-│   ├── scoring.py             # Lazy scoring engine ✨
-│   └── validated.py           # Validation override importer (optional)
-├── scoring_plugin.py           # Advanced address matching algorithm ✨
-├── test_scoring.py             # Comprehensive scoring validation ✨  
-├── system_test.py              # Complete end-to-end system test ✨
-├── app.py                     # Complete Streamlit MVP GUI ✨
-├── config.py                  # Configuration management
-├── setup.py                   # Database setup script
-├── schema.sql                 # Optimized database schema (merged tables)
-├── functions_comprehensive.sql # Database functions for comprehensive results
-├── Makefile                   # Development commands
-├── show_status.py             # Database status utility
-├── clean_search_db.py         # Database cleaning utility
-├── utils/                     # GUI utilities and components ✨
-│   ├── database.py           # Database operations and MCP integration
-│   ├── display.py            # UI components and visualizations
-│   └── __init__.py
-├── test_gui.py               # GUI component test suite ✨
-├── GUI_README.md             # Comprehensive GUI documentation ✨
-├── tmp/                      # Temporary files (migration scripts, tests)
-└── data/                     # Data directory
-    ├── states_baseline/      # Sample state search data
-    ├── states_baseline2/     # Additional sample data  
-    └── pharmacies_new.csv    # Sample pharmacy data
+├── README.md                   # This file
+├── requirements.txt            # Python dependencies
+├── setup.py                   # Database initialization
+├── app.py                     # Streamlit web interface
+├── schema.sql                 # Complete database schema
+├── system_test.py             # End-to-end validation
+├── imports/                   # Data import system
+│   ├── pharmacies.py          # CSV pharmacy importer
+│   ├── states.py              # JSON search results importer
+│   ├── scoring.py             # Address matching engine
+│   └── validated.py           # Manual validation importer
+├── utils/                     # GUI utilities
+│   ├── database.py            # Database operations
+│   └── display.py             # UI components
+├── docs/                      # Comprehensive documentation
+└── data/                      # Sample data for testing
 ```
 
+## Typical Workflow
 
-### Database Functions
+1. **Import pharmacy data**: `python -m imports.pharmacies data/pharmacies.csv "jan_2024"`
+2. **Import state searches**: `python -m imports.states data/FL_searches/ "fl_jan_2024"`
+3. **Launch web interface**: `streamlit run app.py`
+4. **Select datasets**: Choose pharmacy and state datasets in sidebar
+5. **Review results**: System auto-computes address match scores (85+ = match)
+6. **Validate findings**: Mark verified results with reasons
+7. **Export report**: Download CSV with all results and validations
 
-- `get_all_results_with_context(states_tag, pharmacies_tag, validated_tag)` - Comprehensive results view
-- `get_results_matrix(states_tag, pharmacies_tag, validated_tag)` - Main results view (legacy)  
-- `find_missing_scores(states_tag, pharmacies_tag)` - Identifies scoring gaps
+## Key Features
 
-## Web Interface Features ✨
+### 🔄 Lazy Scoring System
+- Address matching computed automatically when dataset combinations are first accessed
+- Intelligent fuzzy matching algorithm with street/city/state/ZIP components
+- Results cached permanently for performance
 
-The MVP GUI provides comprehensive functionality through an intuitive web interface:
+### 📊 Dataset Versioning  
+- Import multiple versions of pharmacy, state, and validation data
+- Mix and match any combination (e.g., "old pharmacies" + "new searches")
+- No global "active" state - users work with specific dataset combinations
 
-### Navigation & Context
-- **Sidebar Navigation**: Switch between all major functions
-- **Dataset Context**: Current selection always visible
-- **Quick Actions**: Data refresh and export capabilities
+### 🌐 Web Interface
+- **Streamlit-based** dashboard with real-time updates
+- **Interactive filtering** by state, status, score ranges
+- **Detail views** with side-by-side address comparisons
+- **Screenshot integration** with automatic organization
+- **Export functionality** with CSV downloads
 
-### Dataset Manager
-- **Interactive Selection**: Choose pharmacy, state, and validation datasets
-- **Metadata Display**: View record counts and creation dates
-- **Status Validation**: Ensures proper dataset combinations
+### ✅ Validation System
+- **Manual overrides** for automated scoring results
+- **Two validation types**: "present" (license exists) and "empty" (no license)
+- **Audit trail** with reasons, timestamps, user tracking
+- **Warning system** detects data changes since validation
 
-### Results Matrix ✨ **Enhanced**
-- **Accurate Record Counts**: Shows precise count of search results per pharmacy-state combination
-- **Smart Status Classification**: Distinguishes "No Data Loaded" vs "No Results Found"
-- **Clean Display**: Blank cells for missing data instead of placeholder text
-- **Advanced Filtering**: By state, status, score range, warnings
-- **Interactive Charts**: Status distribution and score histograms  
-- **Export Functionality**: CSV download with timestamps
-- **Row Selection**: Click to view enhanced detailed information
+## Key Commands
 
-### Scoring Dashboard
-- **Real-time Statistics**: Current scoring status and accuracy metrics
-- **Missing Score Identification**: Find unscored pharmacy-state pairs
-- **Batch Operations**: Trigger scoring computations
-- **Performance Metrics**: Average scores and classification rates
-
-### Detail Views ✨ **Enhanced**
-- **Complete Pharmacy Profiles**: Name, alias, full address, phone, licensed states with search state context
-- **Enhanced Search Results**: Individual search details with complete match scoring (Overall/Address/City-State-ZIP)
-- **Smart Address Highlighting**: Bold formatting for matching address components in pulldowns
-- **Optimized Screenshot Workflow**: Small thumbnails + expandable full-size screenshots at bottom for side-by-side comparison
-- **Address Comparisons**: Side-by-side search result vs. pharmacy reference addresses with color coding
-- **License Validation**: Current status and expiration tracking with search state context
-
-### Validation Manager
-- **Manual Overrides**: Create present/empty validations
-- **Audit Trail**: View existing validation history
-- **Reason Tracking**: Document validation decisions
-- **Integration Ready**: Framework for validation workflow
-
-### Technical Features
-- **MCP Integration**: Ready for production database connection
-- **Lazy Scoring**: Automatic scoring when dataset combinations are first accessed ✨
-- **Image Caching**: Efficient screenshot storage with automatic deduplication
-- **Error Handling**: Comprehensive user feedback
-- **Performance**: Caching and optimization for large datasets
-
-See `GUI_README.md` for detailed usage instructions and MCP integration guide.
-
-## Testing
-
-### System Tests
 ```bash
-# Complete end-to-end system test
-python system_test.py
+# Database management
+make setup           # Initialize database
+make status          # Show current data
+make clean_all       # Full reset
 
-# Address scoring validation  
-python test_scoring.py
+# Development workflow  
+make dev            # Import all test data
+python system_test.py    # Run end-to-end test
 
-# GUI component testing
-python test_gui.py
+# Data import
+python -m imports.pharmacies <csv_file> <tag>
+python -m imports.states <json_dir> <tag>
+python -m imports.validated <csv_file> <tag>  
+
+# Testing
+python test_scoring.py   # Test address matching algorithm
+python test_gui.py       # Test web interface components
 ```
-
-### Expected Results
-- **System Test**: ✅ PASS with 100% accuracy validation
-- **Scoring Test**: Perfect matches (96.5%), weak matches (66.5%), no matches (39.4%)
-- **GUI Test**: All components functional with sample data
 
 ## Documentation
 
-- **`README.md`**: Main project documentation (this file)
-- **`CLAUDE.md`**: Development guidelines and system architecture
-- **`pharmchecker-implementation-docs.md`**: High-level design documentation and original intent
-- **`GUI_README.md`**: Comprehensive GUI usage and integration guide
-- **`GUI_implementation_guide.md`**: Complete GUI implementation guide for developers
-- **`SYSTEM_TEST.md`**: Detailed system testing documentation
+| Document | Description | For |
+|----------|-------------|-----|
+| [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) | System design, database schema, data flow | Developers |
+| [docs/DEVELOPMENT.md](docs/DEVELOPMENT.md) | Setup, debugging, contribution guide | Developers |
+| [docs/USER_GUIDE.md](docs/USER_GUIDE.md) | Web interface usage, features | End Users |
+| [docs/API_REFERENCE.md](docs/API_REFERENCE.md) | Functions, modules, data formats | Integrators |
+| [docs/TESTING.md](docs/TESTING.md) | Test procedures, validation | QA Teams |
 
-## License
+## System Requirements
 
-[Your License Here]
+### Minimum Requirements
+- PostgreSQL 13+ with admin access
+- Python 3.8+ with pip
+- 2GB available disk space
+- 4GB RAM
+
+### Recommended for Production
+- PostgreSQL 14+ dedicated instance
+- Python 3.10+
+- 10GB+ disk space for screenshots
+- 8GB+ RAM for large datasets
+- Linux or macOS (Windows via WSL2)
+
+## Technology Stack
+
+- **Database**: PostgreSQL 13+ with pg_trgm extension
+- **Backend**: Python 3.8+, psycopg2, SQLAlchemy  
+- **Web Framework**: Streamlit 1.28+ with Plotly charts
+- **Data Processing**: pandas, RapidFuzz (address matching)
+- **Dependencies**: python-dotenv, python-slugify
+- **Testing**: Built-in test suite (system_test.py)
+
+## Project Status
+
+✅ **Production Ready** - All core features implemented and tested:
+- Database schema with versioned datasets
+- Import system for pharmacies and state searches  
+- Address scoring engine with 96.5% accuracy for exact matches
+- Web interface with full CRUD operations
+- Validation system with audit trails
+- Export functionality for reporting
+
+## Support
+
+For issues or questions:
+1. Check [docs/TROUBLESHOOTING.md](docs/TROUBLESHOOTING.md) for common issues
+2. Review the system test output: `python system_test.py`
+3. Enable debug mode in `.env`: `LOGGING_LEVEL=DEBUG`
