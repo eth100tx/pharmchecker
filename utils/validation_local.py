@@ -84,10 +84,7 @@ def load_dataset_combination(pharmacies_tag: str, states_tag: str, validated_tag
             if validation_warnings:
                 st.warning(f"⚠️ {len(validation_warnings)} validation consistency issues found")
             
-            record_count = len(comprehensive_results)
-            validation_count = len(comprehensive_results[comprehensive_results['override_type'].notna()])
-            
-            st.success(f"✅ Loaded {record_count} records with {validation_count} validations")
+            # Data loaded successfully - context shown in sidebar
             return True
             
         except Exception as e:

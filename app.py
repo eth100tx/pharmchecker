@@ -135,6 +135,14 @@ def initialize_session_state():
         # If we restored datasets, go to Results Matrix, otherwise Dataset Manager
         if restored_datasets and all(restored_datasets.get(k) for k in ['pharmacies', 'states']):
             st.session_state.current_page = 'Results Matrix'
+            # Auto-load the restored data
+            from utils.validation_local import load_dataset_combination
+            validated_tag = restored_datasets.get('validated')
+            load_dataset_combination(
+                restored_datasets['pharmacies'], 
+                restored_datasets['states'], 
+                validated_tag
+            )
         else:
             st.session_state.current_page = 'Dataset Manager'
     
@@ -171,17 +179,7 @@ def render_sidebar():
     st.sidebar.title("PharmChecker")
     st.sidebar.caption("v1.2 - Session Management")
     
-    # User context display
-    user_context = st.session_state.get('user_context', {})
-    if user_context.get('authenticated'):
-        st.sidebar.success(f"👤 **{user_context['email']}** ({user_context['role']})")
-        st.sidebar.caption(f"Auth: {user_context['auth_mode']}")
-    else:
-        st.sidebar.error("❌ Not authenticated")
-    
-    st.sidebar.markdown("---")
-    
-    # Navigation
+    # Navigation at top
     pages = [
         "Dataset Manager",
         "Results Matrix", 
@@ -203,60 +201,61 @@ def render_sidebar():
     
     st.sidebar.markdown("---")
     
-    # Dataset context display
+    # Current Context with pretty boxes
     st.sidebar.subheader("Current Context")
     datasets = st.session_state.selected_datasets
     db = get_database_manager()
     
-    for kind, tag in datasets.items():
-        if tag:
-            # Get dataset stats
-            stats = db.get_dataset_stats(kind, tag)
-            record_count = stats.get('record_count', 0)
-            
-            st.sidebar.success(f"**{kind.title()}:** {tag}")
-            st.sidebar.caption(f"Records: {record_count}")
-            
-            # For states datasets, show loaded states
-            if kind == 'states' and record_count > 0:
-                loaded_states = db.get_loaded_states(tag)
-                if loaded_states:
-                    if len(loaded_states) <= 6:  # Show state list if small
-                        states_str = ", ".join(loaded_states)
-                        st.sidebar.caption(f"States: {states_str}")
-                    else:
-                        st.sidebar.caption(f"States: {len(loaded_states)} loaded")
-                        
-        else:
-            st.sidebar.info(f"**{kind.title()}:** Not selected")
-            st.sidebar.caption("Records: 0")
+    # Pharmacies box
+    if datasets.get('pharmacies'):
+        stats = db.get_dataset_stats('pharmacies', datasets['pharmacies'])
+        record_count = stats.get('record_count', 0)
+        st.sidebar.success(f"**Pharmacies:**\n{datasets['pharmacies']} ({record_count} records)")
+    else:
+        st.sidebar.info("**Pharmacies:**\nNot selected")
     
-    # Validation controls
-    if datasets.get('validated') or st.session_state.current_page == 'Results Matrix':
-        st.sidebar.subheader("Validation Controls")
+    # States box
+    if datasets.get('states'):
+        stats = db.get_dataset_stats('states', datasets['states'])
+        record_count = stats.get('record_count', 0)
+        st.sidebar.success(f"**States:**\n{datasets['states']} ({record_count} records)")
+    else:
+        st.sidebar.info("**States:**\nNot selected")
+    
+    # Validated box with padlock and status
+    if datasets.get('validated'):
+        stats = db.get_dataset_stats('validated', datasets['validated'])
+        record_count = stats.get('record_count', 0)
         
+        # Get validation lock state and all valid status
+        validation_locked = st.session_state.get('validation_system_locked', True)
+        lock_icon = "🔒" if validation_locked else "🔓"
+        
+        # Check if all validations are valid (you could add logic here to check warnings)
+        all_valid_icon = "✅"  # This could be dynamic based on validation warnings
+        
+        st.sidebar.success(f"**Validated:** {lock_icon} {all_valid_icon}\n{datasets['validated']} ({record_count} records)")
+    else:
+        st.sidebar.info("**Validated:**\nNot selected")
+    
+    
+    # Validation controls (inline with validated box above)
+    if datasets.get('validated') or st.session_state.current_page == 'Results Matrix':
         # Initialize validation lock state
         if 'validation_system_locked' not in st.session_state:
             st.session_state.validation_system_locked = True
         
-        # Lock/unlock validation system
-        col1, col2 = st.sidebar.columns([1, 3])
-        with col1:
-            lock_icon = "🔒" if st.session_state.validation_system_locked else "🔓"
-            if st.button(lock_icon, key="validation_system_lock", help="Lock/unlock validation system"):
-                st.session_state.validation_system_locked = not st.session_state.validation_system_locked
-        
-        with col2:
-            if st.session_state.validation_system_locked:
-                st.write("**Validation Locked**")
-            else:
-                st.write("**Validation Unlocked**")
+        # Toggle lock state button
+        lock_icon = "🔒" if st.session_state.validation_system_locked else "🔓"
+        if st.sidebar.button(f"{lock_icon} {'Locked' if st.session_state.validation_system_locked else 'Unlocked'}", key="validation_system_lock", help="Lock/unlock validation system"):
+            st.session_state.validation_system_locked = not st.session_state.validation_system_locked
     
     st.sidebar.markdown("---")
     
     # Quick actions
     st.sidebar.subheader("Quick Actions")
-    if st.sidebar.button("Refresh Data"):
+    if st.sidebar.button("🔄 Reload Data", help="Reload data from database and clear cache"):
+        clear_loaded_data()
         st.cache_data.clear()
         st.rerun()
     
@@ -267,8 +266,11 @@ def render_sidebar():
         st.sidebar.success("Session cleared!")
         st.rerun()
     
-    # Debug info for session storage
-    if st.sidebar.checkbox("Show Debug Info", False):
+    # Debug mode controls (combines Debug Mode and Debug Info)
+    debug_mode = st.sidebar.checkbox("Debug Mode", True, help="Show technical fields and validation debugging")
+    st.session_state.debug_mode = debug_mode
+    
+    if debug_mode:
         user_context = st.session_state.get('user_context', {})
         st.sidebar.text("Session Storage:")
         if user_context.get('authenticated'):
@@ -278,6 +280,16 @@ def render_sidebar():
     
     if st.sidebar.button("Export Current View"):
         st.sidebar.info("Export functionality coming soon")
+        
+    # No dark mode toggle needed - keeping default Streamlit theme
+    
+    # User context display at bottom
+    user_context = st.session_state.get('user_context', {})
+    if user_context.get('authenticated'):
+        st.sidebar.success(f"👤 **{user_context['email']}** ({user_context['role']})")
+        st.sidebar.caption(f"Auth: {user_context['auth_mode']}")
+    else:
+        st.sidebar.error("❌ Not authenticated")
 
 def render_dataset_manager():
     """Load-based dataset management interface"""
@@ -458,7 +470,7 @@ def render_dataset_manager():
 
 def render_results_matrix():
     """Main results matrix view using loaded data"""
-    st.header("Results Matrix")
+    st.markdown("### Results Matrix")
     
     # Check if data is loaded
     if not is_data_loaded():
@@ -531,8 +543,20 @@ def render_results_matrix():
         else:
             warning_status = " | ✅ **All Valid**"
     
-    # Display info box with validation status
-    st.info(f"**Loaded Data:** {loaded_tags['pharmacies']} + {loaded_tags['states']} + {loaded_tags['validated'] or 'None'} | **Validations:** {validation_count}{warning_status}")
+    # Get record counts for each dataset
+    db = get_database_manager()
+    pharmacy_stats = db.get_dataset_stats('pharmacies', loaded_tags['pharmacies'])
+    states_stats = db.get_dataset_stats('states', loaded_tags['states'])
+    validated_stats = None
+    if loaded_tags['validated']:
+        validated_stats = db.get_dataset_stats('validated', loaded_tags['validated'])
+    
+    # Simple header - just Results Matrix
+    # Show loaded states
+    loaded_states = db.get_loaded_states(loaded_tags['states'])
+    if loaded_states:
+        states_str = ", ".join(sorted(loaded_states))
+        st.caption(f"🗺️ **Loaded States:** {states_str}")
     
     # Show validation warnings as expandable yellow warnings inside the info context
     if validation_warnings:
@@ -552,44 +576,19 @@ def render_results_matrix():
                 
                 st.write("**Action Required:** Review current search results and update validation if changes are correct, or investigate if data changed unexpectedly.")
     
-    # Controls row
-    col1, col2 = st.columns([3, 1])
+    # Skip the word 'Filters' - go straight to filter controls
     
-    with col1:
-        st.subheader("Filters")
+    # Get debug mode from sidebar (will be set there)
+    debug_mode = st.session_state.get('debug_mode', True)
     
-    with col2:
-        debug_mode = st.checkbox("Debug Mode", True, help="Show technical fields and validation debugging")
-        st.session_state.debug_mode = debug_mode
+    # No additional filter options needed - keeping it simple
     
-    # Filter options
-    st.markdown("---")
-    col1, col2, col3 = st.columns(3)
-    
-    with col1:
-        filter_to_loaded = st.checkbox("Show only loaded states", True, 
-                                     help="Only show pharmacy-state combinations where search data exists")
-    
-    with col2:
-        enable_validated = st.checkbox(
-            "Enable Validated", 
-            True,
-            help="Include validated records in results (uncheck to hide validated records)"
-        )
-        
-    with col3:
-        if st.button("🔄 Reload Data", help="Reload data from database"):
-            clear_loaded_data()
-            st.rerun()
-    
-    # Apply filtering
+    # Apply filtering - always filter to loaded states (states with actual search data)
     full_results_df = comprehensive_results.copy()
     
-    # Filter to loaded states if requested
-    if filter_to_loaded:
-        # Get states that have actual search data
-        states_with_data = full_results_df[full_results_df['latest_result_id'].notna()]['search_state'].unique()
-        full_results_df = full_results_df[full_results_df['search_state'].isin(states_with_data)]
+    # Always filter to states that have actual search data
+    states_with_data = full_results_df[full_results_df['latest_result_id'].notna()]['search_state'].unique()
+    full_results_df = full_results_df[full_results_df['search_state'].isin(states_with_data)]
     
     if full_results_df.empty:
         st.warning("No results found matching the current filters")
@@ -624,21 +623,18 @@ def render_results_matrix():
         if len(validated_status) > 0:
             logger.debug(f"Applied status calculation to {len(validated_status)} validated records")
     
-    # Apply validation filtering AFTER status calculation
-    if not enable_validated:
-        # Remove validated records from results
-        results_df = results_df[~results_df['status_bucket'].isin(['validated present', 'validated empty'])]
+    # Keep all records including validated ones
     
     # Get available states and statuses for filters
     available_states = sorted(results_df['search_state'].dropna().unique().tolist())
     available_statuses = sorted(results_df['status_bucket'].dropna().unique().tolist())
     
-    # Filters row
-    col1, col2, col3, col4 = st.columns(4)
+    # Single line filters with inline labels
+    col1, col2, col3 = st.columns([2, 2, 3])
     
     with col1:
         state_options = ['All'] + available_states
-        selected_states = st.multiselect("Filter by State:", state_options, default=['All'])
+        selected_states = st.multiselect("State:", state_options, default=['All'])
         if 'All' in selected_states:
             state_filter = available_states
         else:
@@ -646,17 +642,17 @@ def render_results_matrix():
     
     with col2:
         status_options = ['All'] + available_statuses
-        selected_statuses = st.multiselect("Filter by Status:", status_options, default=['All'])
+        selected_statuses = st.multiselect("Status:", status_options, default=['All'])
         if 'All' in selected_statuses:
             status_filter = available_statuses
         else:
             status_filter = [s for s in selected_statuses if s != 'All']
-    
+            
     with col3:
         score_range = st.slider("Score Range:", 0.0, 100.0, (0.0, 100.0))
+        st.caption(f"{score_range[0]:.0f} - {score_range[1]:.0f}")
     
-    with col4:
-        show_warnings = st.checkbox("Show only items with warnings", False)
+    # No additional filters needed
     
     # Apply filters
     filtered_data = results_df.copy()
@@ -674,25 +670,38 @@ def render_results_matrix():
         )
         filtered_data = filtered_data[score_mask]
     
-    if show_warnings:
-        filtered_data = filtered_data[filtered_data['warnings'].notna() & (filtered_data['warnings'] != '')]
+    # No warning filtering applied
     
-    # Summary statistics
-    st.subheader("Summary Statistics")
-    
-    # Calculate summary stats
+    # Collapsible summary statistics with validated count
     total_checked = len(results_df)
     matches_validated = len(filtered_data[filtered_data['status_bucket'] == 'match'])
     weak_matches = len(filtered_data[filtered_data['status_bucket'] == 'weak match'])
     no_matches_validated = len(filtered_data[filtered_data['status_bucket'] == 'no match'])
+    validated_present = len(filtered_data[filtered_data['status_bucket'] == 'validated present'])
+    validated_empty = len(filtered_data[filtered_data['status_bucket'] == 'validated empty'])
+    total_validated = validated_present + validated_empty
     not_found = len(filtered_data[(filtered_data['status_bucket'] == 'no data') & filtered_data['latest_result_id'].notna()])
     no_data = len(filtered_data[(filtered_data['status_bucket'] == 'no data') & filtered_data['latest_result_id'].isna()])
     
-    # Display summary as single line
-    st.markdown(f"**Total Checked:** {total_checked} | **Matches/Validated:** {matches_validated} | **Weak Matches:** {weak_matches} | **No Matches/Validated:** {no_matches_validated} | **Not Found:** {not_found} | **No Data:** {no_data}")
+    with st.expander(f"📊 Summary: {total_checked} total | {matches_validated} matches | {weak_matches} weak | {no_matches_validated} no match | {total_validated} validated | {not_found} not found | {no_data} no data", expanded=False):
+        col1, col2, col3, col4, col5, col6, col7 = st.columns(7)
+        with col1:
+            st.metric("Total", total_checked)
+        with col2:
+            st.metric("Matches", matches_validated)
+        with col3:
+            st.metric("Weak", weak_matches)
+        with col4:
+            st.metric("No Match", no_matches_validated)
+        with col5:
+            st.metric("Validated", total_validated)
+        with col6:
+            st.metric("Not Found", not_found)
+        with col7:
+            st.metric("No Data", no_data)
     
-    # Display results table
-    st.subheader("Results")
+    # Display results table with maximum space
+    st.markdown("**Results**")
     selected_row = display_dense_results_table(filtered_data, debug_mode)
     
     # Display detailed view below table if a row is selected
