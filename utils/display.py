@@ -23,85 +23,18 @@ def format_score(score: Optional[float]) -> str:
         return "No Score"
     return f"{score:.1f}%"
 
-def format_status_badge(status: str, has_warning: bool = False) -> str:
-    """Format status as colored badge with optional warning indicator"""
+def format_status_badge(status: str) -> str:
+    """Format status as colored badge - no warning complexity"""
     status_icons = {
         'match': '✅',
         'weak match': '⚠️', 
         'no match': '❌',
         'no data': '⚫',
-        'validated': '🔵',
-        'validated empty': '🔵'
+        'validated': '🔵'
     }
     
-    base_icon = status_icons.get(status, '⚪')
-    
-    # Add warning indicator for validated status with warnings
-    if has_warning and status in ['validated', 'validated empty']:
-        return f"{base_icon}! {status.title()}"
-    
-    return f"{base_icon} {status.title()}"
-
-def check_validation_has_warnings(pharmacy_name: str, search_state: str, license_number: str = '') -> bool:
-    """Simple lookup: check if this validation has warnings (computed once during warning display)"""
-    try:
-        import streamlit as st
-        
-        # Quick lookup from the cache populated by display_validation_warnings_section()
-        if hasattr(st.session_state, 'validation_warnings_cache'):
-            cache_key = f"{pharmacy_name}|{search_state}|{license_number}"
-            return st.session_state.validation_warnings_cache.get(cache_key, False)
-        
-        return False
-        
-    except Exception:
-        return False
-
-def format_smart_status_badge(row: dict) -> str:
-    """Format status: if validated, show validated status with optional warning. Otherwise show best match status."""
-    
-    # Simple logic: Check if this pharmacy-state has ANY validation (overrides everything else)
-    pharmacy_name = row.get('pharmacy_name', '')
-    search_state = row.get('search_state', '')
-    
-    from utils.validation_local import get_validation_status
-    import streamlit as st
-    
-    # Check for ANY validations for this pharmacy-state (not just the current license)
-    if hasattr(st.session_state, 'loaded_data') and 'validations' in st.session_state.loaded_data:
-        for (val_pharmacy, val_state, val_license), validation in st.session_state.loaded_data['validations'].items():
-            if val_pharmacy == pharmacy_name and val_state == search_state:
-                # Found a validation for this pharmacy-state - it overrides the match status
-                has_warning = check_validation_has_warnings(val_pharmacy, val_state, val_license)
-                # Debug validation warning check for Belmar PA
-                if pharmacy_name == 'Belmar' and search_state == 'PA':
-                    cache_key = f"{val_pharmacy}|{val_state}|{val_license}"
-                    cache_value = getattr(st.session_state, 'validation_warnings_cache', {}).get(cache_key, 'NOT_FOUND')
-                    print(f"🔍 CONSOLE DEBUG: Warning check for {cache_key} = {has_warning}, cache_value = {cache_value}")
-                if validation['override_type'] == 'present':
-                    return format_status_badge('validated', has_warning)
-                elif validation['override_type'] == 'empty':
-                    return format_status_badge('validated empty', has_warning)
-    
-    # Check for state-level empty validation  
-    empty_validation = get_validation_status(pharmacy_name, search_state, '')
-    if empty_validation and empty_validation['override_type'] == 'empty':
-        has_warning = check_validation_has_warnings(pharmacy_name, search_state, '')
-        return format_status_badge('validated empty', has_warning)
-    
-    # No validation - show the computed status from the row
-    status_bucket = row.get('status_bucket', 'no data')
-    
-    # Handle "no data" cases with distinction  
-    if status_bucket == 'no data':
-        latest_result_id = row.get('latest_result_id')
-        if pd.isna(latest_result_id) or latest_result_id is None:
-            return "⚪ No Data Loaded"
-        else:
-            return "⚫ No Results Found"
-    
-    # Regular status (match, weak match, no match)
-    return format_status_badge(status_bucket, False)
+    icon = status_icons.get(status, '⚪')
+    return f"{icon} {status.title()}"
 
 def format_warnings(warnings: Optional[List[str]]) -> str:
     """Format warnings list for display"""
@@ -216,9 +149,12 @@ def display_results_table(df: pd.DataFrame,
         if col in display_df.columns:
             display_df[col] = display_df[col].apply(format_score)
     
-    # Format status column
+    # Recalculate status column with validation awareness
     if 'status_bucket' in display_df.columns:
-        display_df['Status'] = display_df['status_bucket'].apply(lambda x: format_status_badge(x, False))
+        from utils.validation_local import calculate_status_simple
+        # Recalculate status buckets using validation-aware function
+        display_df['status_bucket'] = display_df.apply(calculate_status_simple, axis=1)
+        display_df['Status'] = display_df['status_bucket'].apply(format_status_badge)
         display_df = display_df.drop('status_bucket', axis=1)
     
     # Format warnings column
@@ -397,99 +333,43 @@ def display_dense_results_table(df: pd.DataFrame, debug_mode: bool) -> Optional[
     grouped_results = []
     
     for (pharmacy_name, state), group in df.groupby(['pharmacy_name', 'search_state']):
-        # Console debug for Belmar PA
-        if pharmacy_name == 'Belmar' and state == 'PA':
-            print(f"\n🔍 CONSOLE DEBUG: Processing Belmar PA group with {len(group)} records")
-            print(f"🔍 CONSOLE DEBUG: License numbers in group: {group['license_number'].tolist()}")
-            print(f"🔍 CONSOLE DEBUG: Record IDs in group: {group['result_id'].tolist()}")
-            print(f"🔍 CONSOLE DEBUG: Full row data:")
-            for idx, row in group.iterrows():
-                print(f"  Record ID: {row.get('result_id')}, License: {row.get('license_number')}, Pharmacy Name: '{row.get('pharmacy_name')}'")
-            # Debug: Show what validations exist for Belmar
-            import streamlit as st
-            if hasattr(st.session_state, 'loaded_data') and 'validations' in st.session_state.loaded_data:
-                belmar_validations = {k: v for k, v in st.session_state.loaded_data['validations'].items() 
-                                    if 'Belmar' in k[0]}  # k[0] is pharmacy_name
-                print(f"🔍 CONSOLE DEBUG: All Belmar validations in session: {belmar_validations}")
-                print(f"🔍 CONSOLE DEBUG: Looking for validation key: ('Belmar', 'PA', 'NP000382')")
-            else:
-                print("🔍 CONSOLE DEBUG: No validations in session state!")
-            
-            # Debug: Check if there are more Belmar PA records in the original data
-            belmar_pa_all = df[(df['pharmacy_name'] == 'Belmar') & (df['search_state'] == 'PA')]
-            print(f"🔍 CONSOLE DEBUG: Total Belmar PA records in original data: {len(belmar_pa_all)}")
-            if len(belmar_pa_all) > 1:
-                print(f"🔍 CONSOLE DEBUG: All Belmar PA record details:")
-                for idx, row in belmar_pa_all.iterrows():
-                    print(f"  Record ID: {row.get('result_id')}, License: {row.get('license_number')}")
+        # Removed complex debug code - using simplified validation system
         
-        # First check if any record in this group is validated (overrides best match)
+        # PRIORITY ORDER: Validated > Best Score > First Record
         validated_row = None
-        from utils.validation_local import get_validation_status
+        from utils.validation_local import is_validated
         
+        # 1. Look for validated record first (HIGHEST PRIORITY)
         for idx, row in group.iterrows():
+            pharmacy_name = row.get('pharmacy_name')
+            search_state = row.get('search_state') 
             license_number = row.get('license_number', '') or ''
-            validation = get_validation_status(pharmacy_name, state, license_number)
-            if pharmacy_name == 'Belmar' and state == 'PA':
-                print(f"🔍 CONSOLE DEBUG: Checking license {license_number}, validation={validation}")
-            if validation:
+            
+            if is_validated(pharmacy_name, search_state, license_number):
                 validated_row = row
-                if pharmacy_name == 'Belmar' and state == 'PA':
-                    print(f"🔍 CONSOLE DEBUG: Found validated row for license {license_number}")
-                break  # Use first validated record found
+                break  # Found validated record - use this one
         
-        # If no license-specific validation, check for state-level empty validation
+        # 2. If no validated record, check for empty validation
         if validated_row is None:
-            empty_validation = get_validation_status(pharmacy_name, state, '')
-            if pharmacy_name == 'Belmar' and state == 'PA':
-                print(f"🔍 CONSOLE DEBUG: No license validation found, empty_validation={empty_validation}")
-            if empty_validation and empty_validation['override_type'] == 'empty':
-                # For empty validations, use any record from the group (doesn't matter which)
-                validated_row = group.iloc[0]
-                if pharmacy_name == 'Belmar' and state == 'PA':
-                    print(f"🔍 CONSOLE DEBUG: Using empty validation")
+            pharmacy_name = group.iloc[0]['pharmacy_name']
+            search_state = group.iloc[0]['search_state']
+            if is_validated(pharmacy_name, search_state, ''):  # Empty validation
+                validated_row = group.iloc[0]  # Use any record, mark as validated
         
-        # Use validated record if found, otherwise use best match
+        # 3. Fall back to best score or first record
         if validated_row is not None:
             best_row = validated_row
-            if pharmacy_name == 'Belmar' and state == 'PA':
-                print(f"🔍 CONSOLE DEBUG: Using validated row with license {best_row.get('license_number')}")
         else:
-            # Get the best result (highest score or first if no scores)
+            # Get best score or first record
             if 'score_overall' in group.columns:
                 scores_filled = group['score_overall'].fillna(-1)
                 best_row = group.loc[scores_filled.idxmax()]
             else:
                 best_row = group.iloc[0]
-            if pharmacy_name == 'Belmar' and state == 'PA':
-                print(f"🔍 CONSOLE DEBUG: Using best match row with license {best_row.get('license_number')}")
         
-        # Check if there's a validated license for this pharmacy-state (override license display)
-        validated_license = None
-        import streamlit as st
-        if hasattr(st.session_state, 'loaded_data') and 'validations' in st.session_state.loaded_data:
-            for (val_pharmacy, val_state, val_license), validation in st.session_state.loaded_data['validations'].items():
-                if val_pharmacy == pharmacy_name and val_state == state:
-                    validated_license = val_license
-                    break  # Use first validated license found
-        
-        # Count multiple license numbers  
-        license_numbers = group['license_number'].dropna().unique()
-        license_count = len(license_numbers)
-        
-        # Format license display - use validated license if exists, otherwise use grouped logic
-        if validated_license:
-            # Show the validated license number
-            license_display = str(validated_license)
-            if pharmacy_name == 'Belmar' and state == 'PA':
-                print(f"🔍 CONSOLE DEBUG: Using validated license {validated_license} instead of best match")
-        elif license_count == 0:
-            license_display = ""  # Leave blank if no license
-        elif license_count == 1:
-            license_display = str(license_numbers[0])
-        else:
-            additional_count = license_count - 1
-            license_display = f"{license_numbers[0]} (+{additional_count} more)"
+        # Simple license display - show license from best row or blank
+        license_number = best_row.get('license_number', '') or ''
+        license_display = str(license_number) if license_number else ""
         
         # Create row for display
         row_data = best_row.copy()
@@ -506,7 +386,7 @@ def display_dense_results_table(df: pd.DataFrame, debug_mode: bool) -> Optional[
             'State': row['search_state'],
             'License #': row['license_display'],
             'Records': row['result_count'],
-            'Status': format_smart_status_badge(row),
+            'Status': format_status_badge(row.get('status_bucket', 'no data')),
             'Score': f"{row['score_overall']:.1f}%" if pd.notna(row.get('score_overall')) else ""
         }
         
@@ -727,36 +607,37 @@ def display_row_detail_section(selected_row: Dict, datasets: Dict[str, str], deb
             # Highlight matching address parts by comparing to pharmacy address
             highlighted_address = _highlight_address_matches(search_address, pharmacy_details)
             
-            # Add validation status to title
+            # Check validation status using simplified system
             validation_badge = ""
+            is_validated = False
             try:
-                from utils.validation_local import get_validation_status
+                from utils.validation_local import is_validated as check_validated
                 pharmacy_name = result.get('search_name', '')
                 search_state = result.get('search_state', '')
                 license_num = result.get('license_number', '') or ''
                 
-                validation = get_validation_status(pharmacy_name, search_state, license_num)
-                if validation:
-                    has_warning = check_validation_has_warnings(pharmacy_name, search_state, license_num)
-                    warning_indicator = "!" if has_warning else ""
-                    if validation['override_type'] == 'present':
-                        validation_badge = f" 🔵{warning_indicator} **Validated**"
-                    elif validation['override_type'] == 'empty':
-                        validation_badge = f" 🔵{warning_indicator} **Validated Empty**"
-                
-                # Check for state-level empty validation too
-                if not validation_badge:
-                    empty_validation = get_validation_status(pharmacy_name, search_state, '')
-                    if empty_validation and empty_validation['override_type'] == 'empty':
-                        has_warning = check_validation_has_warnings(pharmacy_name, search_state, '')
-                        warning_indicator = "!" if has_warning else ""
-                        validation_badge = f" 🔵{warning_indicator} **Validated Empty**"
+                # Check if this specific license is validated
+                if check_validated(pharmacy_name, search_state, license_num):
+                    validation_badge = " 🔵 **Validated**"
+                    is_validated = True
+                # Check for state-level empty validation
+                elif check_validated(pharmacy_name, search_state, ''):
+                    validation_badge = " 🔵 **Validated Empty**"
+                    is_validated = True
             except Exception:
                 pass
             
-            expander_title = f"Result {i+1}: {license_info}{score_text} | {highlighted_address}{validation_badge}"
+            # Build title - prioritize validation status over score
+            if is_validated:
+                # Show validation status instead of score
+                expander_title = f"Result {i+1}: {license_info}{validation_badge} | {highlighted_address}"
+            else:
+                # Show score as usual
+                expander_title = f"Result {i+1}: {license_info}{score_text} | {highlighted_address}"
             
-            with st.expander(expander_title, expanded=(i == 0)):
+            # Open single records, keep multiple records closed for user selection
+            should_expand = len(search_results) == 1
+            with st.expander(expander_title, expanded=should_expand):
                 display_enhanced_search_result_detail(result, pharmacy_details, datasets, debug_mode, i)
 
 
@@ -968,7 +849,7 @@ def display_enhanced_search_result_detail(result: pd.Series, pharmacy_info: Dict
     with col3:
         # Validation controls in the detailed view
         st.markdown("**Validation:**")
-        display_detailed_validation_controls(result, datasets, result_idx)
+        display_simple_validation_controls(result, datasets, result_idx)
     
     if debug_mode and pd.notna(result.get('score_overall')):
         st.markdown("**Debug Info:**")
@@ -1036,6 +917,124 @@ def format_address_with_matching_parts(search_address: str, pharmacy_address: st
         return f":red[{result_address}]"
 
 # Complex comparison function removed - using simple validation display instead
+
+def display_simple_validation_controls(result: pd.Series, datasets: Dict, result_idx: int) -> None:
+    """Simple validation controls with database write + reload"""
+    
+    pharmacy_name = result.get('search_name', '') or result.get('pharmacy_name', '')
+    search_state = result.get('search_state', '')
+    license_number = result.get('license_number', '') or ''
+    
+    # Get current validation status using simple check
+    from utils.validation_local import is_validated
+    is_record_validated = is_validated(pharmacy_name, search_state, license_number) if license_number else is_validated(pharmacy_name, search_state, '')
+    
+    # Check if validation system is locked
+    system_locked = st.session_state.get('validation_system_locked', True)
+    
+    if system_locked:
+        st.info("🔒 Unlock validation in sidebar to make changes")
+        if is_record_validated:
+            st.markdown("🔵 **Validated**")
+        else:
+            st.markdown("⚪ **Not Validated**")
+        return
+    
+    # Simple single validation toggle
+    validated = st.checkbox(
+        "✅ Validate",
+        value=is_record_validated,
+        key=f"validate_{result_idx}",
+        help="Mark this search result as validated"
+    )
+    
+    if validated != is_record_validated:
+        if license_number:
+            # For records with license numbers, validate as present
+            toggle_validation(pharmacy_name, search_state, license_number, 
+                            'present' if validated else 'remove')
+        else:
+            # For empty records, validate as empty
+            toggle_validation(pharmacy_name, search_state, '', 
+                            'empty' if validated else 'remove')
+
+def toggle_validation(pharmacy_name: str, state_code: str, license_number: str, action: str):
+    """Simple validation toggle with database write + reload"""
+    try:
+        from imports.validated import ValidatedImporter
+        
+        with ValidatedImporter() as importer:
+            # Get current dataset info
+            loaded_tags = st.session_state.loaded_data['loaded_tags']
+            validated_tag = loaded_tags.get('validated')
+            
+            # Auto-create validation dataset if needed
+            if not validated_tag:
+                validated_tag = f"validation_{datetime.now().strftime('%Y%m%d_%H%M%S')}"
+                dataset_id = importer.create_dataset('validated', validated_tag, 
+                                                   "GUI-created validation dataset", 'gui_user')
+                # Update session state
+                st.session_state.loaded_data['loaded_tags']['validated'] = validated_tag
+            else:
+                # Get existing dataset ID
+                with importer.conn.cursor() as cur:
+                    cur.execute("SELECT id FROM datasets WHERE kind = 'validated' AND tag = %s", [validated_tag])
+                    result = cur.fetchone()
+                    dataset_id = result[0] if result else None
+            
+            if not dataset_id:
+                st.error(f"Could not find validation dataset: {validated_tag}")
+                return
+                
+            # Perform validation action
+            if action in ['present', 'empty']:
+                success = importer.create_validation_record(
+                    dataset_id, pharmacy_name, state_code, license_number,
+                    action, "GUI validation", 'gui_user'
+                )
+            else:  # remove
+                success = importer.remove_validation_record(
+                    dataset_id, pharmacy_name, state_code, license_number
+                )
+            
+            if success:
+                # Update cached validation data directly
+                validations_data = st.session_state.loaded_data['validations_data']
+                
+                if action in ['present', 'empty']:
+                    # Add record to cache
+                    new_validation = pd.DataFrame([{
+                        'pharmacy_name': pharmacy_name,
+                        'state_code': state_code,
+                        'license_number': license_number if license_number else None,
+                        'override_type': action,
+                        'validated_by': 'gui_user',
+                        'validated_at': datetime.now()
+                    }])
+                    st.session_state.loaded_data['validations_data'] = pd.concat([validations_data, new_validation], ignore_index=True)
+                else:  # remove
+                    # Remove record from cache
+                    if license_number:
+                        mask = (validations_data['pharmacy_name'] == pharmacy_name) & \
+                               (validations_data['state_code'] == state_code) & \
+                               (validations_data['license_number'] == license_number)
+                    else:
+                        mask = (validations_data['pharmacy_name'] == pharmacy_name) & \
+                               (validations_data['state_code'] == state_code) & \
+                               (validations_data['license_number'].isna())
+                    st.session_state.loaded_data['validations_data'] = validations_data[~mask]
+                
+                # Re-run post-load checks (warnings, etc.) with updated cache
+                try:
+                    from utils.validation_local import generate_validation_warnings_simple
+                    generate_validation_warnings_simple()
+                except Exception:
+                    pass
+                
+                st.rerun()
+                
+    except Exception as e:
+        st.error(f"Validation action failed: {e}")
 
 def display_detailed_validation_controls(result: pd.Series, datasets: Dict, result_idx: int) -> None:
     """Display reactive validation controls with instant updates"""

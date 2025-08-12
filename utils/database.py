@@ -423,6 +423,40 @@ class DatabaseManager:
         
         return matrix_df
 
+    def get_validations(self, validated_tag: str) -> pd.DataFrame:
+        """Get validation override records for a dataset"""
+        if not validated_tag:
+            return pd.DataFrame()
+            
+        sql = """
+        SELECT vo.* FROM validated_overrides vo
+        JOIN datasets d ON vo.dataset_id = d.id  
+        WHERE d.tag = %s
+        """
+        
+        try:
+            return self.execute_query(sql, [validated_tag])
+        except Exception as e:
+            logger.error(f"Failed to get validations: {e}")
+            return pd.DataFrame()
+
+    def get_pharmacies(self, pharmacies_tag: str) -> pd.DataFrame:
+        """Get pharmacy records for a dataset"""
+        if not pharmacies_tag:
+            return pd.DataFrame()
+            
+        sql = """
+        SELECT p.* FROM pharmacies p
+        JOIN datasets d ON p.dataset_id = d.id  
+        WHERE d.tag = %s
+        """
+        
+        try:
+            return self.execute_query(sql, [pharmacies_tag])
+        except Exception as e:
+            logger.error(f"Failed to get pharmacies: {e}")
+            return pd.DataFrame()
+
     def find_missing_scores(self, states_tag: str, pharmacies_tag: str) -> pd.DataFrame:
         """Find pharmacy/result pairs that need scoring using comprehensive results"""
         
@@ -692,27 +726,69 @@ class DatabaseManager:
         if 'latest_result_id' in full_df.columns:
             agg_funcs['latest_result_id'] = lambda x: x[x.notna()].iloc[0] if not x[x.notna()].empty else None
         
-        # Sort by score to get best result first for aggregation
-        sorted_df = full_df.sort_values(['pharmacy_id', 'search_state', 'score_overall'], 
-                                       na_position='last', ascending=[True, True, False])
-        
-        # Perform aggregation
+        # Use prioritized selection logic: Validated > Best Score > First Record
         try:
-            matrix_df = sorted_df.groupby(groupby_cols, dropna=False).agg(agg_funcs).reset_index()
+            matrix_rows = []
+            for (pharmacy_id, pharmacy_name, search_state), group in full_df.groupby(groupby_cols, dropna=False):
+                # Priority 1: Look for validated record first
+                validated_row = None
+                
+                # Check if session state is available (GUI context)
+                try:
+                    import streamlit as st
+                    if hasattr(st, 'session_state') and hasattr(st.session_state, 'loaded_data'):
+                        from utils.validation_local import is_validated
+                        
+                        for idx, row in group.iterrows():
+                            license_number = row.get('license_number', '') or ''
+                            if is_validated(pharmacy_name, search_state, license_number):
+                                validated_row = row
+                                break
+                        
+                        # Priority 2: Check for empty validation
+                        if validated_row is None:
+                            if is_validated(pharmacy_name, search_state, ''):  # Empty validation
+                                validated_row = group.iloc[0]
+                except (ImportError, AttributeError):
+                    # No session state available (non-GUI context) - skip validation check
+                    pass
+                
+                # Priority 3: Fall back to best score
+                if validated_row is not None:
+                    selected_row = validated_row
+                else:
+                    # Get best score or first record
+                    if 'score_overall' in group.columns:
+                        scores_filled = group['score_overall'].fillna(-1)
+                        selected_row = group.loc[scores_filled.idxmax()]
+                    else:
+                        selected_row = group.iloc[0]
+                
+                matrix_rows.append(selected_row)
             
-            # Add record counts manually since pandas count doesn't work well with our lambda-heavy approach
-            record_counts = full_df.groupby(['pharmacy_name', 'search_state']).size().reset_index(name='record_count')
-            matrix_df = matrix_df.merge(record_counts, on=['pharmacy_name', 'search_state'], how='left')
-            matrix_df['record_count'] = matrix_df['record_count'].fillna(0).astype(int)
-            
-            # Calculate status buckets after aggregation
-            matrix_df['status_bucket'] = matrix_df.apply(self._calculate_status_bucket, axis=1)
-            
-            # Calculate warnings after aggregation  
-            matrix_df['warnings'] = matrix_df.apply(lambda row: self._calculate_warnings(row, full_df), axis=1)
-            
-            return matrix_df
-            
+            # Create matrix DataFrame from selected rows
+            if matrix_rows:
+                matrix_df = pd.DataFrame(matrix_rows).reset_index(drop=True)
+                
+                # Add record counts manually
+                record_counts = full_df.groupby(['pharmacy_name', 'search_state']).size().reset_index(name='record_count_new')
+                matrix_df = matrix_df.merge(record_counts, on=['pharmacy_name', 'search_state'], how='left')
+                
+                # Replace the old record_count with the new one
+                matrix_df['record_count'] = matrix_df['record_count_new'].fillna(0).astype(int)
+                matrix_df = matrix_df.drop('record_count_new', axis=1)
+                
+                # Calculate status buckets after aggregation
+                matrix_df['status_bucket'] = matrix_df.apply(self._calculate_status_bucket, axis=1)
+                
+                # Calculate warnings after aggregation  
+                matrix_df['warnings'] = matrix_df.apply(lambda row: self._calculate_warnings(row, full_df), axis=1)
+                
+                return matrix_df
+            else:
+                # Return empty DataFrame with required columns
+                return pd.DataFrame(columns=['pharmacy_id', 'pharmacy_name', 'search_state', 'record_count', 'status_bucket', 'warnings'])
+                
         except Exception as e:
             logger.error(f"Failed to aggregate for matrix: {e}")
             return pd.DataFrame()
@@ -786,14 +862,83 @@ class DatabaseManager:
             return 'no match'
     
     def _calculate_warnings(self, row, full_df: pd.DataFrame) -> List[str]:
-        """Calculate warnings for a matrix row (simplified version)"""
+        """Calculate warnings for a matrix row by comparing validation snapshot to current data"""
         warnings = []
         
-        # For now, return basic warnings - can be expanded later
-        if row.get('override_type') == 'present' and pd.isna(row.get('result_id')):
-            warnings.append('Validated present but result not found')
-        elif row.get('override_type') == 'empty' and not pd.isna(row.get('result_id')):
-            warnings.append('Validated empty but results now exist')
+        # Get validation status using cached validation data
+        pharmacy_name = row.get('pharmacy_name')
+        search_state = row.get('search_state')
+        license_number = row.get('license_number', '') or ''
+        
+        # Check if this record is validated using cached data
+        try:
+            import streamlit as st
+            validations_data = st.session_state.loaded_data.get('validations_data')
+            if validations_data is None or validations_data.empty:
+                return None
+                
+            # Find matching validation record
+            validation_match = validations_data[
+                (validations_data['pharmacy_name'] == pharmacy_name) &
+                (validations_data['state_code'] == search_state) &
+                (validations_data['license_number'] == license_number)
+            ]
+            
+            if validation_match.empty:
+                # Check for empty validation
+                empty_match = validations_data[
+                    (validations_data['pharmacy_name'] == pharmacy_name) &
+                    (validations_data['state_code'] == search_state) &
+                    (validations_data['license_number'].isna() | (validations_data['license_number'] == ''))
+                ]
+                
+                if not empty_match.empty and not pd.isna(row.get('result_id')):
+                    warnings.append('Validated empty but results now exist')
+                return warnings if warnings else None
+            
+            validation_record = validation_match.iloc[0]
+            
+            # Basic validation state mismatches
+            if validation_record['override_type'] == 'present' and pd.isna(row.get('result_id')):
+                warnings.append('Validated present but result not found')
+            
+            # Field change warnings for present validations
+            if validation_record['override_type'] == 'present' and not pd.isna(row.get('result_id')):
+                # Compare snapshot vs current data
+                field_comparisons = [
+                    ('license_status', 'license_status'),
+                    ('address', 'result_address'),  # Note: result_ prefix for current data
+                    ('city', 'result_city'),
+                    ('state', 'result_state'), 
+                    ('zip', 'result_zip'),
+                    ('expiration_date', 'expiration_date')
+                ]
+                
+                changed_fields = []
+                for validation_field, current_field in field_comparisons:
+                    snapshot_value = validation_record.get(validation_field)
+                    current_value = row.get(current_field)
+                    
+                    # Skip comparison if either value is None/empty
+                    if pd.isna(snapshot_value) or pd.isna(current_value):
+                        continue
+                    if not str(snapshot_value).strip() or not str(current_value).strip():
+                        continue
+                        
+                    # Convert to strings for comparison and normalize
+                    snapshot_str = str(snapshot_value).strip()
+                    current_str = str(current_value).strip()
+                    
+                    if snapshot_str != current_str:
+                        changed_fields.append(validation_field)
+                
+                if changed_fields:
+                    field_list = ', '.join(changed_fields)
+                    warnings.append(f'Validated data changed: {field_list}')
+        
+        except Exception:
+            # If no session state available, skip warning calculation
+            pass
         
         return warnings if warnings else None
     
