@@ -123,14 +123,16 @@ CREATE TABLE IF NOT EXISTS images (
   UNIQUE(dataset_id, organized_path, search_result_id)
 );
 
--- User allowlist
+-- User allowlist with session storage
 CREATE TABLE IF NOT EXISTS app_users (
   id           SERIAL PRIMARY KEY,
   github_login TEXT UNIQUE,
   email        TEXT UNIQUE,
   role         TEXT NOT NULL CHECK (role IN ('admin','user')),
   is_active    BOOLEAN NOT NULL DEFAULT TRUE,
-  created_at   TIMESTAMP NOT NULL DEFAULT now()
+  session_data JSONB,  -- For storing user session preferences
+  created_at   TIMESTAMP NOT NULL DEFAULT now(),
+  updated_at   TIMESTAMP DEFAULT now()
 );
 
 -- Create indexes for performance

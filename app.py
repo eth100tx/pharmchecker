@@ -31,6 +31,8 @@ from utils.validation_local import (
     load_dataset_combination, is_data_loaded, get_loaded_tags,
     get_comprehensive_results, clear_loaded_data
 )
+from utils.auth import get_auth_manager, get_user_context, require_auth
+from utils.session import auto_restore_dataset_selection, save_dataset_selection
 from imports.validated import ValidatedImporter
 
 # Page configuration
@@ -110,15 +112,32 @@ def get_detailed_validation_warning(pharmacy_name: str, search_state: str, licen
 
 # Initialize session state
 def initialize_session_state():
-    """Initialize session state variables"""
+    """Initialize session state variables with persistence"""
+    # Check authentication first
+    if not require_auth():
+        return
+    
+    # Try to restore dataset selection from previous session
+    restored_datasets = auto_restore_dataset_selection()
+    
     if 'selected_datasets' not in st.session_state:
-        st.session_state.selected_datasets = {
-            'pharmacies': None,
-            'states': None,
-            'validated': None
-        }
+        if restored_datasets:
+            st.session_state.selected_datasets = restored_datasets
+            logger.info(f"Restored dataset selection: {restored_datasets}")
+        else:
+            st.session_state.selected_datasets = {
+                'pharmacies': None,
+                'states': None,
+                'validated': None
+            }
+    
     if 'current_page' not in st.session_state:
-        st.session_state.current_page = 'Dataset Manager'
+        # If we restored datasets, go to Results Matrix, otherwise Dataset Manager
+        if restored_datasets and all(restored_datasets.get(k) for k in ['pharmacies', 'states']):
+            st.session_state.current_page = 'Results Matrix'
+        else:
+            st.session_state.current_page = 'Dataset Manager'
+    
     if 'last_query_time' not in st.session_state:
         st.session_state.last_query_time = None
     
@@ -130,6 +149,10 @@ def initialize_session_state():
             'loaded_tags': None,
             'last_load_time': None
         }
+    
+    # Initialize user context
+    if 'user_context' not in st.session_state:
+        st.session_state.user_context = get_user_context()
 
 # Database operations using utility functions
 def get_available_datasets() -> Dict[str, List[str]]:
@@ -146,7 +169,16 @@ def get_dataset_stats(kind: str, tag: str) -> Dict:
 def render_sidebar():
     """Render the navigation sidebar"""
     st.sidebar.title("PharmChecker")
-    st.sidebar.caption("v1.1 - Validation Debugging")
+    st.sidebar.caption("v1.2 - Session Management")
+    
+    # User context display
+    user_context = st.session_state.get('user_context', {})
+    if user_context.get('authenticated'):
+        st.sidebar.success(f"👤 **{user_context['email']}** ({user_context['role']})")
+        st.sidebar.caption(f"Auth: {user_context['auth_mode']}")
+    else:
+        st.sidebar.error("❌ Not authenticated")
+    
     st.sidebar.markdown("---")
     
     # Navigation
@@ -228,6 +260,22 @@ def render_sidebar():
         st.cache_data.clear()
         st.rerun()
     
+    if st.sidebar.button("Clear Session"):
+        from utils.session import clear_all_session_data
+        clear_all_session_data()
+        st.cache_data.clear()
+        st.sidebar.success("Session cleared!")
+        st.rerun()
+    
+    # Debug info for session storage
+    if st.sidebar.checkbox("Show Debug Info", False):
+        user_context = st.session_state.get('user_context', {})
+        st.sidebar.text("Session Storage:")
+        if user_context.get('authenticated'):
+            st.sidebar.success("✅ Database storage enabled")
+        else:
+            st.sidebar.warning("⚠️ No persistence (not authenticated)")
+    
     if st.sidebar.button("Export Current View"):
         st.sidebar.info("Export functionality coming soon")
 
@@ -265,6 +313,13 @@ def render_dataset_manager():
     # Dataset selection for loading
     st.subheader("Load Dataset Combination")
     
+    # Show session restoration info if available
+    current_selection = st.session_state.selected_datasets
+    has_saved_selection = any(v for v in current_selection.values())
+    
+    if has_saved_selection:
+        st.info(f"💾 **Restored from session:** Pharmacies: {current_selection['pharmacies'] or 'None'}, States: {current_selection['states'] or 'None'}, Validated: {current_selection['validated'] or 'None'}")
+    
     # Get available datasets
     available_datasets = get_available_datasets()
     
@@ -274,9 +329,14 @@ def render_dataset_manager():
     with col1:
         st.markdown("**Pharmacies** (Required)")
         pharmacy_options = available_datasets.get('pharmacies', [])
+        # Set default to restored value if available
+        pharmacy_default = current_selection.get('pharmacies', 'None')
+        if pharmacy_default not in ['None'] + pharmacy_options:
+            pharmacy_default = 'None'
         selected_pharmacy = st.selectbox(
             "Select pharmacy dataset:",
             ['None'] + pharmacy_options,
+            index=(['None'] + pharmacy_options).index(pharmacy_default),
             key="load_pharmacy_select"
         )
         if selected_pharmacy != 'None':
@@ -286,9 +346,14 @@ def render_dataset_manager():
     with col2:
         st.markdown("**State Searches** (Required)")
         states_options = available_datasets.get('states', [])
+        # Set default to restored value if available
+        states_default = current_selection.get('states', 'None')
+        if states_default not in ['None'] + states_options:
+            states_default = 'None'
         selected_states = st.selectbox(
             "Select states dataset:",
             ['None'] + states_options,
+            index=(['None'] + states_options).index(states_default),
             key="load_states_select"
         )
         if selected_states != 'None':
@@ -298,14 +363,44 @@ def render_dataset_manager():
     with col3:
         st.markdown("**Validated Overrides** (Optional)")
         validated_options = available_datasets.get('validated', [])
+        # Set default to restored value if available
+        validated_default = current_selection.get('validated') or 'None'
+        if validated_default not in ['None'] + validated_options:
+            validated_default = 'None'
         selected_validated = st.selectbox(
             "Select validated dataset:",
             ['None'] + validated_options,
+            index=(['None'] + validated_options).index(validated_default),
             key="load_validated_select"
         )
         if selected_validated != 'None':
             stats = get_dataset_stats('validated', selected_validated)
             st.info(f"📊 Records: {stats['record_count']}")
+    
+    # Auto-load feature for restored sessions
+    auto_load_possible = (
+        has_saved_selection and 
+        not is_data_loaded() and 
+        selected_pharmacy != 'None' and 
+        selected_states != 'None'
+    )
+    
+    if auto_load_possible:
+        st.info("🔄 **Auto-loading restored session data...**")
+        validated_tag = selected_validated if selected_validated != 'None' else None
+        success = load_dataset_combination(selected_pharmacy, selected_states, validated_tag)
+        
+        if success:
+            new_datasets = {
+                'pharmacies': selected_pharmacy,
+                'states': selected_states,
+                'validated': validated_tag
+            }
+            st.session_state.selected_datasets = new_datasets
+            save_dataset_selection(new_datasets)
+            st.session_state.validation_load_attempted = False
+            st.session_state.current_page = 'Results Matrix'
+            st.rerun()
     
     # Load button
     st.markdown("---")
@@ -322,11 +417,16 @@ def render_dataset_manager():
                 
                 if success:
                     # Update legacy session state for compatibility
-                    st.session_state.selected_datasets = {
+                    new_datasets = {
                         'pharmacies': selected_pharmacy,
                         'states': selected_states,
                         'validated': validated_tag
                     }
+                    st.session_state.selected_datasets = new_datasets
+                    
+                    # Save dataset selection for persistence
+                    save_dataset_selection(new_datasets)
+                    
                     # Reset validation load attempt flag for new data
                     st.session_state.validation_load_attempted = False
                     # Navigate to Results Matrix after successful loading

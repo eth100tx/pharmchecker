@@ -48,20 +48,41 @@ class DatabaseManager:
                     f"postgresql://{db_config['user']}:{db_config['password']}@{db_config['host']}:{db_config['port']}/{db_config['database']}"
                 )
                 
-                # Use pandas with SQLAlchemy engine and proper parameter binding
-                if params:
-                    # Convert %s to SQLAlchemy parameter style and use positional parameters
-                    # Replace %s with :param1, :param2, etc.
-                    param_sql = sql
-                    param_dict = {}
-                    for i, param in enumerate(params):
-                        param_name = f"param{i+1}"
-                        param_sql = param_sql.replace('%s', f":{param_name}", 1)
-                        param_dict[param_name] = param
-                    df = pd.read_sql_query(text(param_sql), engine, params=param_dict)
+                # Check if this is a SELECT query (returns data) or DML query (no data returned)
+                sql_lower = sql.strip().lower()
+                is_select = sql_lower.startswith('select') or 'returning' in sql_lower
+                
+                if is_select:
+                    # Use pandas for SELECT queries
+                    if params:
+                        # Convert %s to SQLAlchemy parameter style and use positional parameters
+                        param_sql = sql
+                        param_dict = {}
+                        for i, param in enumerate(params):
+                            param_name = f"param{i+1}"
+                            param_sql = param_sql.replace('%s', f":{param_name}", 1)
+                            param_dict[param_name] = param
+                        df = pd.read_sql_query(text(param_sql), engine, params=param_dict)
+                    else:
+                        df = pd.read_sql_query(sql, engine)
+                    return df
                 else:
-                    df = pd.read_sql_query(sql, engine)
-                return df
+                    # Use SQLAlchemy directly for UPDATE/INSERT/DELETE queries
+                    with engine.connect() as conn:
+                        if params:
+                            param_sql = sql
+                            param_dict = {}
+                            for i, param in enumerate(params):
+                                param_name = f"param{i+1}"
+                                param_sql = param_sql.replace('%s', f":{param_name}", 1)
+                                param_dict[param_name] = param
+                            result = conn.execute(text(param_sql), param_dict)
+                        else:
+                            result = conn.execute(text(sql))
+                        conn.commit()
+                        
+                        # Return empty DataFrame for non-SELECT queries
+                        return pd.DataFrame()
                 
             except (ImportError, Exception) as e:
                 if self.allow_fallback:
