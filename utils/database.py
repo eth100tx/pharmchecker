@@ -604,12 +604,15 @@ class DatabaseManager:
             df = self._add_computed_fields(df)
             
             # Lazy scoring trigger: automatically compute missing scores
-            df = self._trigger_lazy_scoring_if_needed(df, states_tag, pharmacies_tag)
+            df = self._trigger_lazy_scoring_if_needed(df, states_tag, pharmacies_tag, validated_tag)
             
             # Apply client-side filtering if requested
             if filter_to_loaded_states and not df.empty:
-                # Get states with actual search data
-                states_with_data = df[df['result_id'].notna()]['search_state'].unique()
+                # Get states with actual search data OR validation data
+                states_with_search_data = df[df['result_id'].notna()]['search_state'].unique()
+                states_with_validation_data = df[df['override_type'].notna()]['search_state'].unique() if 'override_type' in df.columns else []
+                states_with_data = list(set(states_with_search_data) | set(states_with_validation_data))
+                
                 if len(states_with_data) > 0:
                     df = df[df['search_state'].isin(states_with_data)]
             
@@ -622,13 +625,14 @@ class DatabaseManager:
             else:
                 return pd.DataFrame()
     
-    def _trigger_lazy_scoring_if_needed(self, df: pd.DataFrame, states_tag: str, pharmacies_tag: str) -> pd.DataFrame:
+    def _trigger_lazy_scoring_if_needed(self, df: pd.DataFrame, states_tag: str, pharmacies_tag: str, validated_tag: Optional[str] = None) -> pd.DataFrame:
         """Automatically trigger lazy scoring if scores are missing for this dataset combination
         
         Args:
             df: Current comprehensive results
             states_tag: States dataset tag
             pharmacies_tag: Pharmacies dataset tag
+            validated_tag: Validated dataset tag (preserve validation data)
             
         Returns:
             Updated DataFrame with scores computed
@@ -658,10 +662,10 @@ class DatabaseManager:
                 stats = engine.compute_scores(states_tag, pharmacies_tag, max_pairs=1000)
                 logger.info(f"Lazy scoring completed: {stats}")
             
-            # Re-query to get updated data with scores
+            # Re-query to get updated data with scores - PRESERVE validation data
             logger.info("Re-querying data with computed scores...")
             sql = "SELECT * FROM get_all_results_with_context(%s, %s, %s)"
-            params = [states_tag, pharmacies_tag, None]  # Note: not passing validated_tag to avoid recursion
+            params = [states_tag, pharmacies_tag, validated_tag]  # FIXED: Include validated_tag to preserve validation data
             updated_df = self.execute_query(sql, params)
             
             if not updated_df.empty:
@@ -733,22 +737,14 @@ class DatabaseManager:
                 # Priority 1: Look for validated record first
                 validated_row = None
                 
-                # Check if session state is available (GUI context)
+                # Check for validated records using database JOIN field
                 try:
-                    import streamlit as st
-                    if hasattr(st, 'session_state') and hasattr(st.session_state, 'loaded_data'):
-                        from utils.validation_local import is_validated
-                        
-                        for idx, row in group.iterrows():
-                            license_number = row.get('license_number', '') or ''
-                            if is_validated(pharmacy_name, search_state, license_number):
-                                validated_row = row
-                                break
-                        
-                        # Priority 2: Check for empty validation
-                        if validated_row is None:
-                            if is_validated(pharmacy_name, search_state, ''):  # Empty validation
-                                validated_row = group.iloc[0]
+                    from utils.validation_local import is_validated_simple
+                    
+                    for idx, row in group.iterrows():
+                        if is_validated_simple(row):
+                            validated_row = row
+                            break
                 except (ImportError, AttributeError):
                     # No session state available (non-GUI context) - skip validation check
                     pass

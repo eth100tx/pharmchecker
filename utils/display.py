@@ -30,7 +30,9 @@ def format_status_badge(status: str) -> str:
         'weak match': '⚠️', 
         'no match': '❌',
         'no data': '⚫',
-        'validated': '🔵'
+        'validated': '🔵',
+        'validated present': '🔵',
+        'validated empty': '🔵'
     }
     
     icon = status_icons.get(status, '⚪')
@@ -337,24 +339,13 @@ def display_dense_results_table(df: pd.DataFrame, debug_mode: bool) -> Optional[
         
         # PRIORITY ORDER: Validated > Best Score > First Record
         validated_row = None
-        from utils.validation_local import is_validated
+        from utils.validation_local import is_validated_simple
         
         # 1. Look for validated record first (HIGHEST PRIORITY)
         for idx, row in group.iterrows():
-            pharmacy_name = row.get('pharmacy_name')
-            search_state = row.get('search_state') 
-            license_number = row.get('license_number', '') or ''
-            
-            if is_validated(pharmacy_name, search_state, license_number):
+            if is_validated_simple(row):
                 validated_row = row
                 break  # Found validated record - use this one
-        
-        # 2. If no validated record, check for empty validation
-        if validated_row is None:
-            pharmacy_name = group.iloc[0]['pharmacy_name']
-            search_state = group.iloc[0]['search_state']
-            if is_validated(pharmacy_name, search_state, ''):  # Empty validation
-                validated_row = group.iloc[0]  # Use any record, mark as validated
         
         # 3. Fall back to best score or first record
         if validated_row is not None:
@@ -387,7 +378,8 @@ def display_dense_results_table(df: pd.DataFrame, debug_mode: bool) -> Optional[
             'License #': row['license_display'],
             'Records': row['result_count'],
             'Status': format_status_badge(row.get('status_bucket', 'no data')),
-            'Score': f"{row['score_overall']:.1f}%" if pd.notna(row.get('score_overall')) else ""
+            'Score': f"{row['score_overall']:.1f}%" if pd.notna(row.get('score_overall')) else "",
+            'Override': row.get('override_type', '') or ''
         }
         
         if debug_mode:
@@ -611,18 +603,11 @@ def display_row_detail_section(selected_row: Dict, datasets: Dict[str, str], deb
             validation_badge = ""
             is_validated = False
             try:
-                from utils.validation_local import is_validated as check_validated
-                pharmacy_name = result.get('search_name', '')
-                search_state = result.get('search_state', '')
-                license_num = result.get('license_number', '') or ''
+                from utils.validation_local import is_validated_simple
                 
-                # Check if this specific license is validated
-                if check_validated(pharmacy_name, search_state, license_num):
+                # Check if this result is validated using database JOIN field
+                if is_validated_simple(result):
                     validation_badge = " 🔵 **Validated**"
-                    is_validated = True
-                # Check for state-level empty validation
-                elif check_validated(pharmacy_name, search_state, ''):
-                    validation_badge = " 🔵 **Validated Empty**"
                     is_validated = True
             except Exception:
                 pass
@@ -925,9 +910,9 @@ def display_simple_validation_controls(result: pd.Series, datasets: Dict, result
     search_state = result.get('search_state', '')
     license_number = result.get('license_number', '') or ''
     
-    # Get current validation status using simple check
-    from utils.validation_local import is_validated
-    is_record_validated = is_validated(pharmacy_name, search_state, license_number) if license_number else is_validated(pharmacy_name, search_state, '')
+    # Get current validation status using database JOIN field
+    from utils.validation_local import is_validated_simple
+    is_record_validated = is_validated_simple(result)
     
     # Check if validation system is locked
     system_locked = st.session_state.get('validation_system_locked', True)
@@ -951,15 +936,15 @@ def display_simple_validation_controls(result: pd.Series, datasets: Dict, result
     if validated != is_record_validated:
         if license_number:
             # For records with license numbers, validate as present
-            toggle_validation(pharmacy_name, search_state, license_number, 
+            toggle_validation_simple(pharmacy_name, search_state, license_number, 
                             'present' if validated else 'remove')
         else:
             # For empty records, validate as empty
-            toggle_validation(pharmacy_name, search_state, '', 
+            toggle_validation_simple(pharmacy_name, search_state, '', 
                             'empty' if validated else 'remove')
 
-def toggle_validation(pharmacy_name: str, state_code: str, license_number: str, action: str):
-    """Simple validation toggle with database write + reload"""
+def toggle_validation_simple(pharmacy_name: str, state_code: str, license_number: str, action: str):
+    """Simple validation toggle - database write + full reload"""
     try:
         from imports.validated import ValidatedImporter
         
@@ -973,7 +958,6 @@ def toggle_validation(pharmacy_name: str, state_code: str, license_number: str, 
                 validated_tag = f"validation_{datetime.now().strftime('%Y%m%d_%H%M%S')}"
                 dataset_id = importer.create_dataset('validated', validated_tag, 
                                                    "GUI-created validation dataset", 'gui_user')
-                # Update session state
                 st.session_state.loaded_data['loaded_tags']['validated'] = validated_tag
             else:
                 # Get existing dataset ID
@@ -986,7 +970,7 @@ def toggle_validation(pharmacy_name: str, state_code: str, license_number: str, 
                 st.error(f"Could not find validation dataset: {validated_tag}")
                 return
                 
-            # Perform validation action
+            # Perform database operation
             if action in ['present', 'empty']:
                 success = importer.create_validation_record(
                     dataset_id, pharmacy_name, state_code, license_number,
@@ -998,43 +982,87 @@ def toggle_validation(pharmacy_name: str, state_code: str, license_number: str, 
                 )
             
             if success:
-                # Update cached validation data directly
-                validations_data = st.session_state.loaded_data['validations_data']
-                
-                if action in ['present', 'empty']:
-                    # Add record to cache
-                    new_validation = pd.DataFrame([{
-                        'pharmacy_name': pharmacy_name,
-                        'state_code': state_code,
-                        'license_number': license_number if license_number else None,
-                        'override_type': action,
-                        'validated_by': 'gui_user',
-                        'validated_at': datetime.now()
-                    }])
-                    st.session_state.loaded_data['validations_data'] = pd.concat([validations_data, new_validation], ignore_index=True)
-                else:  # remove
-                    # Remove record from cache
-                    if license_number:
-                        mask = (validations_data['pharmacy_name'] == pharmacy_name) & \
-                               (validations_data['state_code'] == state_code) & \
-                               (validations_data['license_number'] == license_number)
-                    else:
-                        mask = (validations_data['pharmacy_name'] == pharmacy_name) & \
-                               (validations_data['state_code'] == state_code) & \
-                               (validations_data['license_number'].isna())
-                    st.session_state.loaded_data['validations_data'] = validations_data[~mask]
-                
-                # Re-run post-load checks (warnings, etc.) with updated cache
-                try:
-                    from utils.validation_local import generate_validation_warnings_simple
-                    generate_validation_warnings_simple()
-                except Exception:
-                    pass
-                
+                # FULL RELOAD - no cache patching needed
+                reload_comprehensive_results()
                 st.rerun()
                 
     except Exception as e:
         st.error(f"Validation action failed: {e}")
+
+def display_validation_status(row: pd.Series) -> str:
+    """Display validation status using database JOIN fields"""
+    override_type = row.get('override_type')
+    
+    if override_type == 'present':
+        return "🔵 **Validated Present**"
+    elif override_type == 'empty':
+        return "🔵 **Validated Empty**"
+    else:
+        return "⚪ **Not Validated**"
+
+def get_validation_controls(row: pd.Series, result_idx: int):
+    """Simple validation controls using database fields"""
+    pharmacy_name = row.get('pharmacy_name')
+    search_state = row.get('search_state') 
+    license_number = row.get('license_number', '') or ''
+    override_type = row.get('override_type')
+    
+    # Check if validation system is locked
+    system_locked = st.session_state.get('validation_system_locked', True)
+    
+    if system_locked:
+        st.info("🔒 Unlock validation in sidebar to make changes")
+        return
+    
+    # Present validation toggle
+    if license_number:
+        is_present_validated = (override_type == 'present')
+        validated = st.checkbox(
+            "✅ Validate Present",
+            value=is_present_validated,
+            key=f"validate_present_{result_idx}",
+            help="Mark this search result as validated"
+        )
+        
+        if validated != is_present_validated:
+            action = 'present' if validated else 'remove'
+            toggle_validation_simple(pharmacy_name, search_state, license_number, action)
+    
+    # Empty validation toggle  
+    is_empty_validated = (override_type == 'empty')
+    validated_empty = st.checkbox(
+        "🔵 Validate Empty",
+        value=is_empty_validated,
+        key=f"validate_empty_{result_idx}",
+        help="Mark this pharmacy-state as having no valid license"
+    )
+    
+    if validated_empty != is_empty_validated:
+        action = 'empty' if validated_empty else 'remove'
+        toggle_validation_simple(pharmacy_name, search_state, '', action)
+
+def reload_comprehensive_results():
+    """Reload comprehensive results with fresh validation data"""
+    from utils.database import get_database_manager
+    
+    loaded_tags = st.session_state.loaded_data['loaded_tags']
+    db = get_database_manager()
+    
+    # Get fresh data from database (includes updated validation JOINs)
+    comprehensive_results = db.get_comprehensive_results(
+        loaded_tags['states'], 
+        loaded_tags['pharmacies'], 
+        loaded_tags['validated']
+    )
+    
+    # Update session state
+    st.session_state.loaded_data['comprehensive_results'] = comprehensive_results
+    
+    # Run validation consistency check
+    from utils.validation_local import run_validation_consistency_check
+    validation_warnings = run_validation_consistency_check(comprehensive_results, loaded_tags['validated'])
+    if validation_warnings:
+        st.sidebar.warning(f"⚠️ {len(validation_warnings)} validation issues detected")
 
 def display_detailed_validation_controls(result: pd.Series, datasets: Dict, result_idx: int) -> None:
     """Display reactive validation controls with instant updates"""
@@ -1044,14 +1072,8 @@ def display_detailed_validation_controls(result: pd.Series, datasets: Dict, resu
     search_state = result.get('search_state', '')
     license_number = result.get('license_number', '') or ''
     
-    # Debug: show what fields we have and record IDs
-    debug_mode = st.session_state.get('debug_mode', False)
-    if debug_mode:
-        search_record_id = result.get('result_id') or result.get('latest_result_id') or 'N/A'
-        st.write(f"🔍 DEBUG: Field mapping - search_name: '{result.get('search_name')}', pharmacy_name: '{result.get('pharmacy_name')}', search_state: '{search_state}', license_number: '{license_number}'")
-        st.write(f"🔍 DEBUG: Search Record ID: {search_record_id}")
-        available_fields = list(result.keys())
-        st.write(f"🔍 DEBUG: Available result fields: {available_fields[:15]}...")  # Show first 15 fields
+    # Get search record ID for validation tracking
+    search_record_id = result.get('result_id') or result.get('latest_result_id') or 'N/A'
     
     # Get current validation status from local state
     try:
@@ -1064,9 +1086,6 @@ def display_detailed_validation_controls(result: pd.Series, datasets: Dict, resu
         is_validated = current_validation is not None
         validation_available = True
         
-        
-        # Debug: Print search record and validation record IDs
-        search_record_id = result.get('result_id') or result.get('latest_result_id') or 'N/A'
         
         # Try to get validation record ID
         if current_validation:
@@ -1238,10 +1257,6 @@ def display_detailed_validation_controls(result: pd.Series, datasets: Dict, resu
                 except Exception as e:
                     validation_record_id = f'Error: {str(e)}'
             
-            st.write(f"🔍 DEBUG VALIDATION: is_validated={is_validated}, license_number='{license_number}'")
-            st.write(f"🔍 DEBUG VALIDATION: Search Record ID={search_record_id}, Validation Record ID={validation_record_id}")
-            st.write(f"🔍 DEBUG VALIDATION: current_validation={current_validation}")
-            st.write(f"🔍 DEBUG VALIDATION: About to check validation snapshot conditions...")
         
         # Show snapshot section for present validations (with license number)
         present_condition = license_number and current_validation and current_validation.get('override_type') == 'present'
@@ -1249,27 +1264,17 @@ def display_detailed_validation_controls(result: pd.Series, datasets: Dict, resu
         
         
         if present_condition:
-            if debug_mode:
-                st.write(f"🔍 DEBUG VALIDATION: Calling snapshot section for PRESENT validation")
             display_validation_snapshot_section(pharmacy_name, search_state, license_number, result)
         # Show for empty validations too (they may have snapshot data)
         elif empty_condition:
-            if debug_mode:
-                st.write(f"🔍 DEBUG VALIDATION: Calling snapshot section for EMPTY validation")
             display_validation_snapshot_section(pharmacy_name, search_state, '', result)
-        else:
-            if debug_mode:
-                st.write(f"🔍 DEBUG VALIDATION: Snapshot section NOT called - conditions not met")
 
 def display_validation_snapshot_section(pharmacy_name: str, search_state: str, license_number: str, current_result: pd.Series) -> None:
     """Simple validation display - just dump both records with their IDs"""
     import streamlit as st
     import pandas as pd
     
-    # Only show detailed validation if debug mode is enabled
-    debug_mode = st.session_state.get('debug_mode', False)
-    if not debug_mode:
-        return
+    # Show validation snapshot comparison
     
     # Check if there's a validation record
     try:
@@ -1324,7 +1329,7 @@ def display_validation_snapshot_section(pharmacy_name: str, search_state: str, l
     validated_at = validation.get('validated_at', 'Unknown')
     
     st.info(f"Validated as **{override_type}** by {validated_by} at {validated_at}")
-    st.caption(f"🔍 Search Record ID: {search_record_id} | Validation Record ID: {validation_record_id}")
+    st.caption(f"Search Record ID: {search_record_id} | Validation Record ID: {validation_record_id}")
     
     # Create two columns for side-by-side record dumps
     col1, col2 = st.columns(2)

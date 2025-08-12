@@ -10,9 +10,13 @@ import json
 from datetime import datetime
 import os
 import sys
+import logging
 
 # Add project root to path
 sys.path.append(os.path.dirname(os.path.abspath(__file__)))
+
+# Configure logger
+logger = logging.getLogger(__name__)
 
 # Import utility modules
 from utils.database import get_database_manager, query_with_cache
@@ -38,14 +42,15 @@ st.set_page_config(
 )
 
 def get_detailed_validation_warning(pharmacy_name: str, search_state: str, license_number: str, 
-                                   validations_data: pd.DataFrame, comprehensive_results: pd.DataFrame) -> Dict:
+                                   comprehensive_results: pd.DataFrame) -> Dict:
     """Get detailed field-by-field differences for a validation warning"""
     
-    # Find the validation record
-    validation_match = validations_data[
-        (validations_data['pharmacy_name'] == pharmacy_name) &
-        (validations_data['state_code'] == search_state) &
-        (validations_data['license_number'] == license_number)
+    # Find the validation record in comprehensive results
+    validation_match = comprehensive_results[
+        (comprehensive_results['pharmacy_name'] == pharmacy_name) &
+        (comprehensive_results['search_state'] == search_state) &
+        (comprehensive_results['license_number'] == license_number) &
+        (comprehensive_results['override_type'].notna())
     ]
     
     if validation_match.empty:
@@ -122,7 +127,6 @@ def initialize_session_state():
         st.session_state.loaded_data = {
             'comprehensive_results': None,
             'pharmacies_data': None,
-            'validations_data': None,
             'loaded_tags': None,
             'last_load_time': None
         }
@@ -368,30 +372,28 @@ def render_results_matrix():
     comprehensive_results = get_comprehensive_results()
     loaded_tags = get_loaded_tags()
     
-    # Ensure validation data is loaded in session state
-    # If we have loaded_tags but no validation data, re-parse it (but only once)
-    if 'validation_load_attempted' not in st.session_state:
-        st.session_state.validation_load_attempted = False
+    # Ensure validation data is loaded if validation dataset is selected
+    if (loaded_tags and loaded_tags.get('validated') and 
+        comprehensive_results is not None and 
+        len(comprehensive_results[comprehensive_results['override_type'].notna()]) == 0):
         
-    if (loaded_tags and (st.session_state.loaded_data.get('validations_data') is None or len(st.session_state.loaded_data['validations_data']) == 0) and 
-        not st.session_state.validation_load_attempted):
-        st.info("🔄 Loading validation data...")
-        st.session_state.validation_load_attempted = True
-        try:
-            from utils.validation_local import load_dataset_combination
-            success = load_dataset_combination(
-                loaded_tags['pharmacies'],
-                loaded_tags['states'], 
-                loaded_tags['validated']
-            )
-            if success:
-                st.rerun()  # Refresh to show validation data
-        except Exception as e:
-            st.warning(f"Could not load validation data: {e}")
+        from utils.validation_local import load_dataset_combination
+        success = load_dataset_combination(
+            loaded_tags['pharmacies'],
+            loaded_tags['states'], 
+            loaded_tags['validated']
+        )
+        if success:
+            comprehensive_results = get_comprehensive_results()
     
-    # Display current context with validation count and warnings
-    validations_data = st.session_state.loaded_data.get('validations_data')
-    validation_count = len(validations_data) if validations_data is not None else 0
+    # Display current context with validation count from comprehensive results
+    validation_count = len(comprehensive_results[comprehensive_results['override_type'].notna()]) if comprehensive_results is not None else 0
+    
+    # Log validation data status
+    if comprehensive_results is not None and 'override_type' in comprehensive_results.columns:
+        validation_count = len(comprehensive_results[comprehensive_results['override_type'].notna()])
+        if validation_count > 0:
+            logger.info(f"Loaded {validation_count} validation records in Results Matrix")
     
     # Check for validation warnings and incorporate into the info box
     warning_status = ""
@@ -423,7 +425,7 @@ def render_results_matrix():
                 # Get detailed field differences for this record
                 detailed_warning = get_detailed_validation_warning(
                     pharmacy_name, search_state, license_number, 
-                    validations_data, comprehensive_results
+                    comprehensive_results
                 )
                 validation_warnings.append(detailed_warning)
         else:
@@ -493,10 +495,20 @@ def render_results_matrix():
         st.warning("No results found matching the current filters")
         return
     
+    # Check validation data before aggregation
+    validation_before = full_results_df[full_results_df['override_type'].notna()] if 'override_type' in full_results_df.columns else pd.DataFrame()
+    if len(validation_before) > 0:
+        logger.debug(f"Found {len(validation_before)} validation records before aggregation")
+    
     # Aggregate for matrix display using local database manager
     db = get_database_manager()
     with st.spinner("Aggregating results for matrix view..."):
         results_df = db.aggregate_for_matrix(full_results_df)
+        
+    # Check validation data after aggregation
+    validation_after = results_df[results_df['override_type'].notna()] if 'override_type' in results_df.columns else pd.DataFrame()
+    if len(validation_after) > 0:
+        logger.debug(f"Found {len(validation_after)} validation records after aggregation")
     
     if results_df.empty:
         st.warning("No aggregated results found")
@@ -506,10 +518,16 @@ def render_results_matrix():
     from utils.validation_local import calculate_status_simple
     results_df['status_bucket'] = results_df.apply(calculate_status_simple, axis=1)
     
+    # Log status results for validation records
+    if 'override_type' in results_df.columns:
+        validated_status = results_df[results_df['override_type'].notna()]
+        if len(validated_status) > 0:
+            logger.debug(f"Applied status calculation to {len(validated_status)} validated records")
+    
     # Apply validation filtering AFTER status calculation
     if not enable_validated:
         # Remove validated records from results
-        results_df = results_df[results_df['status_bucket'] != 'validated']
+        results_df = results_df[~results_df['status_bucket'].isin(['validated present', 'validated empty'])]
     
     # Get available states and statuses for filters
     available_states = sorted(results_df['search_state'].dropna().unique().tolist())
@@ -911,53 +929,18 @@ def render_validation_manager():
             else:
                 st.error("Please fill in all required fields")
     
-    # Show existing validation overrides with comprehensive data
+    # Show existing validation overrides
     datasets = st.session_state.selected_datasets
     if datasets['validated']:
         st.subheader("Existing Validation Overrides")
         
-        # First, show data from cached session state (single source of truth)
-        if is_data_loaded():
-            validations_data = st.session_state.loaded_data.get('validations_data')
-            if validations_data is not None and not validations_data.empty:
-                st.write("**From Cached Session Data (Single Source of Truth):**")
-                
-                # Show comprehensive validation data
-                display_columns = [
-                    'id', 'pharmacy_name', 'state_code', 'license_number', 'override_type',
-                    'license_status', 'address', 'city', 'state', 'zip', 'expiration_date',
-                    'reason', 'validated_by', 'validated_at'
-                ]
-                
-                # Filter to only show available columns
-                available_columns = [col for col in display_columns if col in validations_data.columns]
-                display_df = validations_data[available_columns].copy()
-                
-                st.dataframe(display_df, hide_index=True)
-                
-                # Debug info
-                if st.checkbox("Show Debug Info", False):
-                    st.write("**Debug Information:**")
-                    st.write(f"Total validation records: {len(validations_data)}")
-                    st.write(f"Available columns: {list(validations_data.columns)}")
-                    st.write("**Sample validation record:**")
-                    if len(validations_data) > 0:
-                        sample_record = validations_data.iloc[0].to_dict()
-                        for key, value in sample_record.items():
-                            st.write(f"  {key}: {value}")
-            else:
-                st.info("No validation overrides in cached data")
-        else:
-            st.warning("No data loaded. Please load data first to see validation overrides.")
-        
-        # Also show direct database query for comparison
-        st.write("**From Direct Database Query (For Comparison):**")
         db = get_database_manager()
         try:
+            # Get validation overrides with key fields for comparison
             overrides_sql = """
-            SELECT id, pharmacy_name, state_code, override_type, license_number,
-                   license_status, address, city, state, zip, expiration_date,
-                   reason, validated_by, validated_at
+            SELECT vo.id, vo.pharmacy_name, vo.state_code, vo.override_type, vo.license_number,
+                   vo.license_status, vo.address, vo.city, vo.state, vo.zip, vo.expiration_date,
+                   vo.reason, vo.validated_by, vo.validated_at
             FROM validated_overrides vo
             JOIN datasets d ON vo.dataset_id = d.id
             WHERE d.tag = %s
@@ -967,12 +950,60 @@ def render_validation_manager():
             overrides_df = db.execute_query(overrides_sql, [datasets['validated']])
             
             if not overrides_df.empty:
-                st.dataframe(overrides_df, hide_index=True)
+                st.write(f"**{len(overrides_df)} validation overrides found:**")
+                
+                # Show compact table with essential fields including record ID
+                display_columns = ['id', 'pharmacy_name', 'state_code', 'override_type', 'license_number', 'validated_at']
+                available_columns = [col for col in display_columns if col in overrides_df.columns]
+                compact_df = overrides_df[available_columns].copy()
+                st.dataframe(compact_df, hide_index=True)
+                
+                # Show comprehensive validation data from database JOIN
+                st.subheader("Comprehensive Results with Validation Data")
+                
+                if datasets.get('pharmacies') and datasets.get('states'):
+                    comprehensive_sql = """
+                    SELECT pharmacy_id, pharmacy_name, search_state, result_id, license_number,
+                           override_type, validated_license, score_overall, result_status
+                    FROM get_all_results_with_context(%s, %s, %s)
+                    WHERE override_type IS NOT NULL
+                    ORDER BY pharmacy_name, search_state
+                    """
+                    
+                    try:
+                        comprehensive_df = db.execute_query(comprehensive_sql, [datasets['states'], datasets['pharmacies'], datasets['validated']])
+                        
+                        if not comprehensive_df.empty:
+                            st.write(f"**{len(comprehensive_df)} records with validation data from JOIN:**")
+                            st.dataframe(comprehensive_df, hide_index=True)
+                        else:
+                            st.info("No records found with validation data in comprehensive results")
+                            
+                    except Exception as e:
+                        st.error(f"Error loading comprehensive validation data: {e}")
+                        
             else:
                 st.info("No validation overrides found in database")
                 
         except Exception as e:
             st.error(f"Error loading validation overrides from database: {e}")
+            
+        # Show validation consistency check
+        if datasets.get('pharmacies') and datasets.get('states'):
+            st.subheader("Validation Consistency Check")
+            
+            try:
+                consistency_sql = "SELECT * FROM check_validation_consistency(%s, %s, %s)"
+                consistency_df = db.execute_query(consistency_sql, [datasets['states'], datasets['pharmacies'], datasets['validated']])
+                
+                if not consistency_df.empty:
+                    st.warning(f"**{len(consistency_df)} validation consistency issues found:**")
+                    st.dataframe(consistency_df, hide_index=True)
+                else:
+                    st.success("✅ No validation consistency issues found")
+                    
+            except Exception as e:
+                st.error(f"Error running validation consistency check: {e}")
     else:
         st.info("Select a Validated dataset to view existing overrides")
 

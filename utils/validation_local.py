@@ -15,72 +15,62 @@ def initialize_loaded_data_state():
     """Initialize loaded data session state if not present"""
     if 'loaded_data' not in st.session_state:
         st.session_state.loaded_data = {
-            'comprehensive_results': None,  # Search results + pharmacies (cached)
+            'comprehensive_results': None,  # Search results + pharmacies + validation data from JOIN
             'pharmacies_data': None,        # Pharmacy records (cached)
-            'validations_data': None,       # Validation overrides (cached)
             'loaded_tags': None,
             'last_load_time': None
         }
 
-def is_validated(pharmacy_name: str, state_code: str, license_number: str = '') -> bool:
-    """Simple validation check using cached validation data"""
-    validations_data = st.session_state.loaded_data.get('validations_data')
-    if validations_data is None or validations_data.empty:
-        return False
-    
-    # Check cached validation data
-    if license_number:  # Present validation
-        matches = validations_data[
-            (validations_data['pharmacy_name'] == pharmacy_name) &
-            (validations_data['state_code'] == state_code) &
-            (validations_data['license_number'] == license_number)
-        ]
-    else:  # Empty validation  
-        matches = validations_data[
-            (validations_data['pharmacy_name'] == pharmacy_name) &
-            (validations_data['state_code'] == state_code) &
-            (validations_data['license_number'].isna())
-        ]
-    
-    return not matches.empty
+def is_validated_simple(row: pd.Series) -> bool:
+    """Simple validation check using database JOIN field"""
+    return row.get('override_type') is not None
+
+def get_validation_type(row: pd.Series) -> Optional[str]:
+    """Get validation type: 'present', 'empty', or None"""
+    return row.get('override_type')
+
+def get_validated_license(row: pd.Series) -> Optional[str]:
+    """Get validated license number"""
+    return row.get('validated_license')
 
 def calculate_status_simple(row: pd.Series) -> str:
-    """Single status calculation function using cached validation data"""
-    pharmacy_name = row.get('pharmacy_name')
-    search_state = row.get('search_state')
-    license_number = row.get('license_number', '') or ''
+    """Single status calculation function using database JOIN fields"""
     
-    # Check if validated using cached data
-    if is_validated(pharmacy_name, search_state, license_number) or \
-       is_validated(pharmacy_name, search_state, ''):  # Check empty validation too
-        return 'validated'
+    # Check validation status first (HIGHEST PRIORITY)
+    override_type = row.get('override_type')
+    if override_type == 'empty':
+        return 'validated empty'
+    elif override_type == 'present':
+        return 'validated present'
     
     # Fall back to score-based status
     score = row.get('score_overall')
-    if pd.isna(score): return 'no data'
-    elif score >= 85: return 'match'
-    elif score >= 60: return 'weak match'  
-    else: return 'no match'
+    if pd.isna(score): 
+        return 'no data'
+    elif score >= 85: 
+        return 'match'
+    elif score >= 60: 
+        return 'weak match'  
+    else: 
+        return 'no match'
 
 
 def load_dataset_combination(pharmacies_tag: str, states_tag: str, validated_tag: Optional[str] = None) -> bool:
-    """Load dataset combination - cache three separate datasets"""
+    """Load dataset combination - single source approach"""
     
     with st.spinner("Loading dataset combination..."):
         try:
             from utils.database import get_database_manager
             db = get_database_manager()
             
-            # Load three separate datasets and cache
-            comprehensive_results = db.get_comprehensive_results(states_tag, pharmacies_tag, None)
+            # Load ONLY comprehensive results (includes validation data via JOIN)
+            comprehensive_results = db.get_comprehensive_results(states_tag, pharmacies_tag, validated_tag)
             pharmacies_data = db.get_pharmacies(pharmacies_tag)
-            validations_data = db.get_validations(validated_tag) if validated_tag else pd.DataFrame()
             
-            # Store all three DataFrames - cached until reload
+            # Store simplified session state
             st.session_state.loaded_data = {
-                'comprehensive_results': comprehensive_results,
+                'comprehensive_results': comprehensive_results,  # Contains override_type from JOIN
                 'pharmacies_data': pharmacies_data,
-                'validations_data': validations_data,
                 'loaded_tags': {
                     'pharmacies': pharmacies_tag,
                     'states': states_tag, 
@@ -89,14 +79,13 @@ def load_dataset_combination(pharmacies_tag: str, states_tag: str, validated_tag
                 'last_load_time': datetime.now()
             }
             
-            # Generate warnings once on load (required)
-            try:
-                generate_validation_warnings_simple()
-            except Exception as e:
-                st.warning(f"Warning generation failed: {e}")
+            # Run validation consistency check
+            validation_warnings = run_validation_consistency_check(comprehensive_results, validated_tag)
+            if validation_warnings:
+                st.warning(f"⚠️ {len(validation_warnings)} validation consistency issues found")
             
             record_count = len(comprehensive_results)
-            validation_count = len(validations_data)
+            validation_count = len(comprehensive_results[comprehensive_results['override_type'].notna()])
             
             st.success(f"✅ Loaded {record_count} records with {validation_count} validations")
             return True
@@ -105,12 +94,39 @@ def load_dataset_combination(pharmacies_tag: str, states_tag: str, validated_tag
             st.error(f"Failed to load dataset combination: {e}")
             return False
 
-def generate_validation_warnings_simple():
-    """Generate validation warnings once on load using cached data"""
-    # Simple implementation - can be expanded later if needed
-    # For now, just mark that warnings have been checked
-    if hasattr(st.session_state, 'loaded_data'):
-        st.session_state.loaded_data['warnings_generated'] = True
+def run_validation_consistency_check(comprehensive_df: pd.DataFrame, validated_tag: Optional[str]) -> List[Dict]:
+    """Run validation consistency checks using SQL function"""
+    if not validated_tag:
+        return []
+    
+    try:
+        from utils.database import get_database_manager
+        db = get_database_manager()
+        
+        # Get loaded tags from session state
+        loaded_tags = st.session_state.loaded_data['loaded_tags']
+        
+        # Call SQL validation function
+        sql = "SELECT * FROM check_validation_consistency(%s, %s, %s)"
+        params = [loaded_tags['states'], loaded_tags['pharmacies'], validated_tag]
+        
+        validation_issues = db.execute_query(sql, params)
+        
+        if not validation_issues.empty:
+            # Convert to list of dicts for easy handling
+            issues = validation_issues.to_dict('records')
+            
+            # Log issues
+            for issue in issues:
+                logger.warning(f"Validation consistency issue: {issue['issue_type']} - {issue['description']}")
+            
+            return issues
+        
+        return []
+        
+    except Exception as e:
+        logger.error(f"Failed to run validation consistency check: {e}")
+        return []
 
 def is_data_loaded() -> bool:
     """Check if data is currently loaded in session state"""
@@ -133,7 +149,6 @@ def clear_loaded_data():
     st.session_state.loaded_data = {
         'comprehensive_results': None,
         'pharmacies_data': None,
-        'validations_data': None,
         'loaded_tags': None,
         'last_load_time': None
     }
