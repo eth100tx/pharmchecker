@@ -378,8 +378,7 @@ def display_dense_results_table(df: pd.DataFrame, debug_mode: bool) -> Optional[
             'License #': row['license_display'],
             'Records': row['result_count'],
             'Status': format_status_badge(row.get('status_bucket', 'no data')),
-            'Score': f"{row['score_overall']:.1f}%" if pd.notna(row.get('score_overall')) else "",
-            'Override': row.get('override_type', '') or ''
+            'Score': f"{row['score_overall']:.1f}%" if pd.notna(row.get('score_overall')) else ""
         }
         
         if debug_mode:
