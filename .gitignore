@@ -6,6 +6,9 @@
 # Temporary files and directories
 tmp/
 
+# Cached images
+image_cache/
+
 # Database files
 *.db
 *.sqlite
