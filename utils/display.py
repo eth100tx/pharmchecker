@@ -11,6 +11,10 @@ import plotly.graph_objects as go
 from datetime import datetime
 import os
 import sys
+import logging
+
+# Initialize logger
+logger = logging.getLogger(__name__)
 
 # Add project root to path for imports
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -666,34 +670,23 @@ def _highlight_address_matches(search_address: str, pharmacy_details: Dict) -> s
     return ', '.join(highlighted_parts)
 
 def get_pharmacy_info(pharmacy_name: str, pharmacies_dataset: str) -> Dict:
-    """Get pharmacy information from database (supports both direct DB and API modes)"""
+    """Get pharmacy information from database (API-first architecture)"""
     from .database import get_database_manager
     
     try:
         db = get_database_manager(allow_fallback=True)
         
-        # Check if we're using API mode and need to implement this differently
-        if hasattr(db, 'use_api') and db.use_api:
-            # API mode: Get pharmacy data via API
-            pharmacies_df = db.get_pharmacies(pharmacies_dataset)
-            if not pharmacies_df.empty:
-                # Filter by pharmacy name
-                matching = pharmacies_df[pharmacies_df['name'] == pharmacy_name]
-                if not matching.empty:
-                    return matching.iloc[0].to_dict()
-        else:
-            # Direct database mode: Use SQL query
-            sql = """
-            SELECT p.name, p.alias, p.address, p.suite, p.city, p.state, p.zip, p.state_licenses
-            FROM pharmacies p
-            JOIN datasets d ON p.dataset_id = d.id
-            WHERE p.name = %s AND d.tag = %s
-            """
+        # API-first: Always get pharmacy data via API
+        pharmacies_df = db.get_pharmacies(pharmacies_dataset)
+        if not pharmacies_df.empty:
+            # Filter by pharmacy name (try exact match first, then partial)
+            matching = pharmacies_df[pharmacies_df['name'] == pharmacy_name]
+            if matching.empty:
+                # Try partial match if exact match fails
+                matching = pharmacies_df[pharmacies_df['name'].str.contains(pharmacy_name, case=False, na=False)]
             
-            df = db.execute_query(sql, [pharmacy_name, pharmacies_dataset])
-            
-            if not df.empty:
-                return df.iloc[0].to_dict()
+            if not matching.empty:
+                return matching.iloc[0].to_dict()
             
     except Exception as e:
         logger.warning(f"Failed to get pharmacy info from database: {e}")

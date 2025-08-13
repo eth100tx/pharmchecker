@@ -40,6 +40,7 @@ class ApiDatabaseManager:
         if not API_CLIENT_AVAILABLE:
             raise Exception("API client not available - cannot initialize ApiDatabaseManager")
         
+        self.use_api = use_api
         self.use_cloud_db = use_cloud_db
         
         # Initialize API client - fail if it doesn't work

@@ -82,13 +82,13 @@ class PostgRESTClient:
     
     def get_comprehensive_results(self, states_tag: str, pharmacies_tag: str, validated_tag: str = "") -> List[Dict]:
         """Call the main comprehensive results RPC function"""
-        params = {
+        data = {
             'p_states_tag': states_tag,
             'p_pharmacies_tag': pharmacies_tag,
-            'p_validated_tag': validated_tag
+            'p_validated_tag': validated_tag if validated_tag else None
         }
         
-        response = self._request('GET', 'rpc/get_all_results_with_context', params=params)
+        response = self._request('POST', 'rpc/get_all_results_with_context', data=data)
         return response.json()
     
     def export_table_to_csv(self, table: str, filename: str, filters: Dict = None) -> str:
@@ -122,9 +122,61 @@ class PostgRESTClient:
     def delete_dataset(self, dataset_id: int) -> Dict:
         """Delete a dataset and all its associated data via PostgREST"""
         try:
-            # Note: This would normally use a stored procedure for safe cascading delete
-            # For now, return error indicating manual deletion needed
-            return {"error": "Dataset deletion via PostgREST not yet implemented. Use direct database access."}
+            # First get dataset info for confirmation
+            dataset_response = self._request('GET', f'datasets?id=eq.{dataset_id}')
+            datasets = dataset_response.json()
+            
+            if not datasets:
+                return {"error": f"Dataset {dataset_id} not found"}
+            
+            dataset = datasets[0]
+            kind = dataset.get('kind', 'unknown')
+            
+            # Delete associated data based on kind (same logic as Supabase)
+            tables_to_clean = []
+            if kind == 'pharmacies':
+                tables_to_clean = [
+                    ('pharmacies', 'dataset_id'),
+                    ('match_scores', 'pharmacies_dataset_id')
+                ]
+            elif kind == 'states':
+                tables_to_clean = [
+                    ('search_results', 'dataset_id'),
+                    ('match_scores', 'states_dataset_id'),
+                    ('images', 'dataset_id')
+                ]
+            elif kind == 'validated':
+                tables_to_clean = [('validated_overrides', 'dataset_id')]
+            
+            # Delete from associated tables first
+            deleted_counts = {}
+            for table, foreign_key in tables_to_clean:
+                try:
+                    delete_response = self._request('DELETE', f'{table}?{foreign_key}=eq.{dataset_id}')
+                    
+                    # Get count from Content-Range header
+                    content_range = delete_response.headers.get('Content-Range', '')
+                    if '/' in content_range:
+                        count = content_range.split('/')[-1]
+                        deleted_counts[table] = count
+                    else:
+                        deleted_counts[table] = "unknown"
+                        
+                except Exception as e:
+                    deleted_counts[table] = f"error: {e}"
+            
+            # Finally delete the dataset itself
+            dataset_delete_response = self._request('DELETE', f'datasets?id=eq.{dataset_id}')
+            
+            if dataset_delete_response.status_code in [204, 200]:
+                return {
+                    "success": True,
+                    "message": f"Dataset '{dataset['tag']}' ({kind}) deleted successfully",
+                    "deleted_counts": deleted_counts
+                }
+            else:
+                return {"error": f"Failed to delete dataset: {dataset_delete_response.text}"}
+                
         except Exception as e:
             return {"error": str(e)}
     
@@ -254,7 +306,24 @@ class UnifiedClient:
         else:
             return self.postgrest_client.get_table_data(table, limit, filters, select)
     
-    # Removed switch_backend - no fallback behavior allowed
+    def switch_backend(self, use_supabase: bool) -> bool:
+        """Switch between Supabase and PostgREST backends
+        
+        Args:
+            use_supabase: True to use Supabase, False to use PostgREST
+            
+        Returns:
+            True if switch was successful, False otherwise
+        """
+        try:
+            if use_supabase and not SUPABASE_AVAILABLE:
+                return False
+            
+            self.prefer_supabase = use_supabase
+            self.use_supabase = use_supabase
+            return True
+        except Exception:
+            return False
     
     def get_active_backend(self) -> str:
         """Get the name of the active backend"""

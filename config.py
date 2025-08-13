@@ -10,9 +10,8 @@ from dotenv import load_dotenv
 # Load environment variables from .env file
 load_dotenv()
 
-# API Backend Configuration - Phase 1 Migration
-USE_API_BACKEND = os.getenv('USE_API_BACKEND', 'false').lower() == 'true'
-USE_CLOUD_DB = os.getenv('USE_CLOUD_DB', 'false').lower() == 'true'
+# Backend Configuration - API-First Architecture
+USE_CLOUD_DB = os.getenv('USE_CLOUD_DB', 'true').lower() == 'true'
 
 # API Configuration
 API_CACHE_TTL = int(os.getenv('API_CACHE_TTL', '300'))  # Cache timeout in seconds
@@ -48,7 +47,7 @@ def setup_logging():
     )
 
 def get_db_config() -> Dict[str, Any]:
-    """Get database configuration"""
+    """Get database configuration (legacy - for migration scripts only)"""
     return DB_CONFIG.copy()
 
 def get_supabase_config() -> Dict[str, Any]:
@@ -56,8 +55,8 @@ def get_supabase_config() -> Dict[str, Any]:
     return SUPABASE_CONFIG.copy()
 
 def is_api_mode() -> bool:
-    """Check if running in API mode"""
-    return USE_API_BACKEND
+    """Check if running in API mode (always True in API-first architecture)"""
+    return True
 
 def use_cloud_database() -> bool:
     """Check if cloud database (Supabase) should be used"""
@@ -65,9 +64,7 @@ def use_cloud_database() -> bool:
 
 def get_backend_type() -> str:
     """Get the backend type based on configuration"""
-    if not USE_API_BACKEND:
-        return 'direct_database'
-    elif USE_CLOUD_DB and SUPABASE_CONFIG['url'] and SUPABASE_CONFIG['anon_key']:
+    if USE_CLOUD_DB and SUPABASE_CONFIG['url'] and SUPABASE_CONFIG['anon_key']:
         return 'supabase'
     else:
         return 'postgrest'
@@ -76,22 +73,20 @@ def validate_config() -> Dict[str, str]:
     """Validate configuration and return any issues"""
     issues = {}
     
-    if USE_API_BACKEND:
-        # Validate API configuration
-        if USE_CLOUD_DB:
-            if not SUPABASE_CONFIG['url']:
-                issues['supabase_url'] = 'SUPABASE_URL is required when USE_CLOUD_DB=true'
-            if not SUPABASE_CONFIG['anon_key']:
-                issues['supabase_key'] = 'SUPABASE_ANON_KEY is required when USE_CLOUD_DB=true'
-        else:
-            if not POSTGREST_URL:
-                issues['postgrest_url'] = 'POSTGREST_URL is required for PostgREST API mode'
+    # Validate API configuration (always in API mode)
+    if USE_CLOUD_DB:
+        if not SUPABASE_CONFIG['url']:
+            issues['supabase_url'] = 'SUPABASE_URL is required when USE_CLOUD_DB=true'
+        if not SUPABASE_CONFIG['anon_key']:
+            issues['supabase_key'] = 'SUPABASE_ANON_KEY is required when USE_CLOUD_DB=true'
     else:
-        # Validate direct database configuration
+        if not POSTGREST_URL:
+            issues['postgrest_url'] = 'POSTGREST_URL is required for PostgREST API mode'
+        # Also validate PostgreSQL config for PostgREST backend
         if not DB_CONFIG['password']:
-            issues['db_password'] = 'DB_PASSWORD is required for direct database mode'
+            issues['db_password'] = 'DB_PASSWORD is required for PostgREST backend'
         if not DB_CONFIG['host']:
-            issues['db_host'] = 'DB_HOST is required for direct database mode'
+            issues['db_host'] = 'DB_HOST is required for PostgREST backend'
     
     return issues
 
@@ -99,7 +94,7 @@ def get_config_summary() -> Dict[str, Any]:
     """Get a summary of current configuration for debugging"""
     return {
         'mode': get_backend_type(),
-        'api_mode': USE_API_BACKEND,
+        'api_mode': True,  # Always True in API-first architecture
         'use_cloud_db': USE_CLOUD_DB,
         'postgrest_url': POSTGREST_URL,
         'supabase_configured': bool(SUPABASE_CONFIG['url'] and SUPABASE_CONFIG['anon_key']),
