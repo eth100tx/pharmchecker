@@ -32,7 +32,11 @@ def main():
     
     # Initialize client
     if 'client' not in st.session_state:
-        st.session_state.client = create_client()
+        st.session_state.client = create_client(prefer_supabase=True)
+    
+    # Force refresh client if it doesn't have the new methods (for development)
+    if not hasattr(st.session_state.client, 'delete_dataset') or not hasattr(st.session_state.client, 'get_table_counts'):
+        st.session_state.client = create_client(prefer_supabase=True)
     
     client = st.session_state.client
     

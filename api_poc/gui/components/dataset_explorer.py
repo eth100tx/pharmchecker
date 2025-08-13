@@ -120,6 +120,67 @@ def render_dataset_explorer(client):
                         )
                 except Exception as e:
                     st.error(f"Export failed: {e}")
+            
+            # Dataset Management
+            st.subheader("Dataset Management")
+            st.warning("⚠️ **Use with caution!** These operations cannot be undone.")
+            
+            col1, col2 = st.columns(2)
+            
+            with col1:
+                st.write("**Rename Dataset**")
+                new_tag = st.text_input(
+                    "New Tag Name", 
+                    value=selected_row['tag'],
+                    help="Enter a new tag name for this dataset"
+                )
+                
+                if st.button(f"🏷️ Rename to '{new_tag}'", disabled=(new_tag == selected_row['tag'] or not new_tag)):
+                    if st.session_state.get('confirm_rename') != dataset_id:
+                        st.session_state.confirm_rename = dataset_id
+                        st.warning("Click again to confirm rename operation")
+                    else:
+                        with st.spinner("Renaming dataset..."):
+                            try:
+                                result = client.rename_dataset(dataset_id, new_tag)
+                                if result.get('success'):
+                                    st.success(result['message'])
+                                    st.session_state.confirm_rename = None
+                                    st.rerun()  # Refresh the page to show new name
+                                else:
+                                    st.error(result.get('error', 'Unknown error'))
+                            except Exception as e:
+                                st.error(f"Rename failed: {e}")
+            
+            with col2:
+                st.write("**Delete Dataset**")
+                st.error("This will permanently delete ALL data associated with this dataset!")
+                
+                if st.button(f"🗑️ Delete '{selected_row['tag']}'"):
+                    if st.session_state.get('confirm_delete') != dataset_id:
+                        st.session_state.confirm_delete = dataset_id
+                        st.error("⚠️ Click again to PERMANENTLY delete this dataset and ALL its data!")
+                    else:
+                        with st.spinner("Deleting dataset..."):
+                            try:
+                                # Debug: Check if method exists
+                                if not hasattr(client, 'delete_dataset'):
+                                    st.error("Error: delete_dataset method not found. Please refresh the page.")
+                                    return
+                                
+                                result = client.delete_dataset(dataset_id)
+                                if result.get('success'):
+                                    st.success(result['message'])
+                                    if 'deleted_counts' in result:
+                                        st.info(f"Deleted records: {result['deleted_counts']}")
+                                    st.session_state.confirm_delete = None
+                                    st.rerun()  # Refresh the page
+                                else:
+                                    st.error(result.get('error', 'Unknown error'))
+                            except AttributeError as e:
+                                st.error(f"Method error: {e}. Please refresh the page to reload the client.")
+                            except Exception as e:
+                                st.error(f"Delete failed: {e}")
     
     except Exception as e:
         st.error(f"Error loading datasets: {e}")

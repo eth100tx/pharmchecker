@@ -63,6 +63,21 @@ def render_comprehensive_results(client):
         with col2:
             cache_results = st.checkbox("Cache Results", value=True, help="Cache results in session state")
         
+        # Quick compatibility test
+        if st.button("🔍 Test Compatibility", help="Test if the selected dataset combination works"):
+            if pharmacies_tag and states_tag:
+                with st.spinner("Testing compatibility..."):
+                    try:
+                        test_result = client.get_comprehensive_results(states_tag, pharmacies_tag, validated_tag)
+                        if isinstance(test_result, dict) and 'error' in test_result:
+                            st.error(f"❌ Incompatible: {test_result['error']}")
+                        else:
+                            st.success(f"✅ Compatible! Would return {len(test_result)} results")
+                    except Exception as e:
+                        st.error(f"❌ Test failed: {e}")
+            else:
+                st.warning("Please select both pharmacy and states datasets first")
+        
         # Execute query
         if st.button("Get Comprehensive Results", type="primary", disabled=not (pharmacies_tag and states_tag)):
             # Use cache if enabled
@@ -75,6 +90,37 @@ def render_comprehensive_results(client):
                 with st.spinner("Fetching comprehensive results..."):
                     try:
                         results = client.get_comprehensive_results(states_tag, pharmacies_tag, validated_tag)
+                        
+                        # Check for error response from client
+                        if isinstance(results, dict) and 'error' in results:
+                            error_msg = results['error']
+                            st.error(f"API Error: {error_msg}")
+                            
+                            # Provide helpful guidance for common errors
+                            if "cannot extract elements from a scalar" in error_msg:
+                                st.warning("""
+                                **Data Compatibility Issue**
+                                
+                                This error occurs when there's a mismatch between the data format in different datasets. 
+                                Some pharmacy datasets were imported with different field formats.
+                                
+                                **Try these alternatives:**
+                                - Use different pharmacy/states dataset combinations
+                                - Use the Dataset Explorer to examine individual datasets
+                                - Check that both datasets contain compatible data
+                                """)
+                                
+                                # Show working combinations if we can identify them
+                                if pharmacy_datasets and states_datasets:
+                                    st.info("💡 **Tip:** Try different combinations from the dropdowns above. Some dataset pairs work better than others.")
+                            
+                            return
+                        
+                        # Validate results format
+                        if not isinstance(results, list):
+                            st.error(f"Invalid response format. Expected list, got {type(results)}")
+                            st.json(results)
+                            return
                         
                         if cache_results:
                             st.session_state[cache_key] = results
@@ -102,7 +148,32 @@ def display_comprehensive_results(results: List[Dict]):
         st.warning("No results found")
         return
     
-    df = pd.DataFrame(results)
+    # Validate results format before creating DataFrame
+    if not isinstance(results, list):
+        st.error(f"Invalid results format. Expected list, got {type(results)}")
+        st.json(results)  # Show the actual data for debugging
+        return
+    
+    # Check if all items are dictionaries
+    non_dict_items = [i for i, item in enumerate(results) if not isinstance(item, dict)]
+    if non_dict_items:
+        st.error(f"Invalid result items at indices: {non_dict_items}. All items must be dictionaries.")
+        for i in non_dict_items[:3]:  # Show first 3 problematic items
+            st.write(f"Item {i}: {results[i]} (type: {type(results[i])})")
+        return
+    
+    # Handle empty results after validation
+    if len(results) == 0:
+        st.warning("No results found")
+        return
+    
+    try:
+        df = pd.DataFrame(results)
+    except Exception as e:
+        st.error(f"Failed to create DataFrame: {e}")
+        st.write("Raw results data:")
+        st.json(results[:3])  # Show first 3 items for debugging
+        return
     
     # Summary metrics
     st.subheader("Results Summary")

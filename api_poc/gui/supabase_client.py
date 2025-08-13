@@ -187,6 +187,148 @@ class SupabaseClient:
     def get_comprehensive_results_supabase(self, states_tag: str, pharmacies_tag: str, validated_tag: str = "") -> List[Dict]:
         """Call the comprehensive results function via Supabase REST API"""
         return self.get_comprehensive_results_via_rest(states_tag, pharmacies_tag, validated_tag)
+    
+    def delete_dataset_supabase(self, dataset_id: int) -> Dict:
+        """Delete a dataset and all its associated data from Supabase"""
+        try:
+            # First get dataset info for confirmation
+            dataset_response = requests.get(
+                f"{self.url}/rest/v1/datasets?id=eq.{dataset_id}",
+                headers=self.headers,
+                timeout=10
+            )
+            
+            if dataset_response.status_code != 200:
+                return {"error": f"Dataset {dataset_id} not found"}
+            
+            datasets = dataset_response.json()
+            if not datasets:
+                return {"error": f"Dataset {dataset_id} not found"}
+            
+            dataset = datasets[0]
+            kind = dataset.get('kind', 'unknown')
+            
+            # Delete associated data based on kind
+            tables_to_clean = []
+            if kind == 'pharmacies':
+                tables_to_clean = ['pharmacies', 'match_scores']
+            elif kind == 'states':
+                tables_to_clean = ['search_results', 'match_scores', 'images']
+            elif kind == 'validated':
+                tables_to_clean = ['validated_overrides']
+            
+            # Delete from associated tables first
+            deleted_counts = {}
+            for table in tables_to_clean:
+                try:
+                    delete_response = requests.delete(
+                        f"{self.url}/rest/v1/{table}?dataset_id=eq.{dataset_id}",
+                        headers=self.headers,
+                        timeout=30
+                    )
+                    
+                    # Get count from Content-Range header
+                    content_range = delete_response.headers.get('Content-Range', '')
+                    if '/' in content_range:
+                        count = content_range.split('/')[-1]
+                        deleted_counts[table] = count
+                    else:
+                        deleted_counts[table] = "unknown"
+                        
+                except Exception as e:
+                    deleted_counts[table] = f"error: {e}"
+            
+            # Finally delete the dataset itself
+            dataset_delete_response = requests.delete(
+                f"{self.url}/rest/v1/datasets?id=eq.{dataset_id}",
+                headers=self.headers,
+                timeout=10
+            )
+            
+            if dataset_delete_response.status_code in [204, 200]:
+                return {
+                    "success": True,
+                    "message": f"Dataset '{dataset['tag']}' ({kind}) deleted successfully",
+                    "deleted_counts": deleted_counts
+                }
+            else:
+                return {"error": f"Failed to delete dataset: {dataset_delete_response.text}"}
+                
+        except Exception as e:
+            return {"error": str(e)}
+    
+    def rename_dataset_supabase(self, dataset_id: int, new_tag: str) -> Dict:
+        """Rename a dataset tag in Supabase"""
+        try:
+            # Check if new tag already exists
+            check_response = requests.get(
+                f"{self.url}/rest/v1/datasets?tag=eq.{new_tag}",
+                headers=self.headers,
+                timeout=10
+            )
+            
+            if check_response.status_code == 200:
+                existing = check_response.json()
+                if existing:
+                    return {"error": f"Dataset with tag '{new_tag}' already exists"}
+            
+            # Update the tag
+            update_response = requests.patch(
+                f"{self.url}/rest/v1/datasets?id=eq.{dataset_id}",
+                headers=self.headers,
+                json={"tag": new_tag},
+                timeout=10
+            )
+            
+            if update_response.status_code in [204, 200]:
+                return {"success": True, "message": f"Dataset renamed to '{new_tag}'"}
+            else:
+                return {"error": f"Failed to rename dataset: {update_response.text}"}
+                
+        except Exception as e:
+            return {"error": str(e)}
+    
+    def get_table_counts_supabase(self, tables: List[str]) -> Dict[str, str]:
+        """Get record counts for multiple tables from Supabase"""
+        counts = {}
+        for table in tables:
+            try:
+                # Use HEAD request with proper authentication
+                url = f"{self.url}/rest/v1/{table}"
+                headers = self.headers.copy()
+                headers['Prefer'] = 'count=exact'
+                
+                response = requests.head(url, headers=headers, timeout=10)
+                
+                count_range = response.headers.get('Content-Range', '')
+                if '/' in count_range:
+                    count = count_range.split('/')[-1]
+                    counts[table] = count
+                elif response.status_code == 200:
+                    # Try GET with limit 1 to get count
+                    get_response = requests.get(
+                        url, 
+                        headers=headers, 
+                        params={'limit': '1'}, 
+                        timeout=10
+                    )
+                    count_range = get_response.headers.get('Content-Range', '')
+                    if '/' in count_range:
+                        count = count_range.split('/')[-1]
+                        counts[table] = count
+                    else:
+                        # Fallback: sample and estimate
+                        try:
+                            data = self.get_table_data_via_rest(table, limit=100)
+                            counts[table] = f"{len(data)}+ (sampled)"
+                        except:
+                            counts[table] = "Unable to count"
+                else:
+                    counts[table] = f"Error (status {response.status_code})"
+                    
+            except Exception as e:
+                counts[table] = f"Error: {str(e)[:30]}"
+        return counts
 
 
 def create_supabase_client() -> SupabaseClient:

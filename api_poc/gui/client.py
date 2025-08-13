@@ -118,6 +118,47 @@ class PostgRESTClient:
             return response.status_code == 200
         except:
             return False
+    
+    def delete_dataset(self, dataset_id: int) -> Dict:
+        """Delete a dataset and all its associated data via PostgREST"""
+        try:
+            # Note: This would normally use a stored procedure for safe cascading delete
+            # For now, return error indicating manual deletion needed
+            return {"error": "Dataset deletion via PostgREST not yet implemented. Use direct database access."}
+        except Exception as e:
+            return {"error": str(e)}
+    
+    def rename_dataset(self, dataset_id: int, new_tag: str) -> Dict:
+        """Rename a dataset tag via PostgREST"""
+        try:
+            # Update the datasets table
+            response = self._request('PATCH', f'datasets?id=eq.{dataset_id}', data={'tag': new_tag})
+            if response.status_code == 204:  # No content = success
+                return {"success": True, "message": f"Dataset renamed to '{new_tag}'"}
+            else:
+                return {"error": f"Failed to rename dataset: {response.text}"}
+        except Exception as e:
+            return {"error": str(e)}
+    
+    def get_table_counts(self, tables: List[str]) -> Dict[str, str]:
+        """Get record counts for multiple tables via PostgREST"""
+        counts = {}
+        for table in tables:
+            try:
+                # Use HEAD request with Prefer header
+                url = f"{self.base_url}/{table}"
+                headers = {'Prefer': 'count=exact'}
+                response = requests.head(url, headers=headers, timeout=10)
+                
+                count_range = response.headers.get('Content-Range', '')
+                if '/' in count_range:
+                    count = count_range.split('/')[-1]
+                    counts[table] = count
+                else:
+                    counts[table] = "Unable to get count"
+            except Exception as e:
+                counts[table] = f"Error: {str(e)[:30]}"
+        return counts
 
 
 class UnifiedClient:
@@ -165,12 +206,11 @@ class UnifiedClient:
     def get_pharmacies(self, dataset_id: int = None, limit: int = 100) -> List[Dict]:
         """Get pharmacies from active backend"""
         if self.use_supabase:
-            # Build query for Supabase
+            # Use REST API for Supabase
+            filters = {}
             if dataset_id:
-                query = f"SELECT * FROM pharmacies WHERE dataset_id = {dataset_id} LIMIT {limit}"
-            else:
-                query = f"SELECT * FROM pharmacies LIMIT {limit}"
-            result = self.supabase_client.execute_sql(query)
+                filters['dataset_id'] = f'eq.{dataset_id}'
+            result = self.supabase_client.get_table_data_via_rest('pharmacies', limit=limit, filters=filters)
             return result if isinstance(result, list) else []
         else:
             return self.postgrest_client.get_pharmacies(dataset_id, limit)
@@ -178,12 +218,11 @@ class UnifiedClient:
     def get_search_results(self, dataset_id: int = None, limit: int = 100) -> List[Dict]:
         """Get search results from active backend"""
         if self.use_supabase:
-            # Build query for Supabase
+            # Use REST API for Supabase
+            filters = {}
             if dataset_id:
-                query = f"SELECT * FROM search_results WHERE dataset_id = {dataset_id} LIMIT {limit}"
-            else:
-                query = f"SELECT * FROM search_results LIMIT {limit}"
-            result = self.supabase_client.execute_sql(query)
+                filters['dataset_id'] = f'eq.{dataset_id}'
+            result = self.supabase_client.get_table_data_via_rest('search_results', limit=limit, filters=filters)
             return result if isinstance(result, list) else []
         else:
             return self.postgrest_client.get_search_results(dataset_id, limit)
@@ -198,26 +237,8 @@ class UnifiedClient:
     def get_table_data(self, table: str, limit: int = 1000, filters: Dict = None, select: str = None) -> List[Dict]:
         """Get data from any table"""
         if self.use_supabase:
-            # Build SQL query for Supabase
-            query = f"SELECT "
-            if select:
-                query += select
-            else:
-                query += "*"
-            query += f" FROM {table}"
-            
-            if filters:
-                # Simple filter conversion (expand as needed)
-                conditions = []
-                for key, value in filters.items():
-                    if value.startswith('eq.'):
-                        conditions.append(f"{key} = '{value[3:]}'")
-                if conditions:
-                    query += " WHERE " + " AND ".join(conditions)
-            
-            query += f" LIMIT {limit}"
-            
-            result = self.supabase_client.execute_sql(query)
+            # Use REST API for Supabase
+            result = self.supabase_client.get_table_data_via_rest(table, limit=limit, filters=filters)
             return result if isinstance(result, list) else []
         else:
             return self.postgrest_client.get_table_data(table, limit, filters, select)
@@ -245,6 +266,22 @@ class UnifiedClient:
             return f"{self.supabase_client.get_project_url()}/rest/v1" if self.supabase_client else "Not configured"
         else:
             return self.postgrest_client.base_url
+    
+    def get_table_schema(self) -> Dict:
+        """Get table schema from active backend"""
+        if self.use_supabase:
+            # For Supabase, we can't get OpenAPI schema easily, so return a simplified version
+            return {
+                "paths": {
+                    "/datasets": {},
+                    "/pharmacies": {},
+                    "/search_results": {},
+                    "/validated_overrides": {},
+                    "/rpc/get_all_results_with_context": {}
+                }
+            }
+        else:
+            return self.postgrest_client.get_table_schema()
     
     # Supabase-specific methods
     def get_supabase_info(self) -> Dict:
@@ -275,6 +312,27 @@ class UnifiedClient:
         results["functions"] = functions_result
         
         return results
+    
+    def delete_dataset(self, dataset_id: int) -> Dict:
+        """Delete a dataset and all its associated data"""
+        if self.use_supabase:
+            return self.supabase_client.delete_dataset_supabase(dataset_id)
+        else:
+            return self.postgrest_client.delete_dataset(dataset_id)
+    
+    def rename_dataset(self, dataset_id: int, new_tag: str) -> Dict:
+        """Rename a dataset tag"""
+        if self.use_supabase:
+            return self.supabase_client.rename_dataset_supabase(dataset_id, new_tag)
+        else:
+            return self.postgrest_client.rename_dataset(dataset_id, new_tag)
+    
+    def get_table_counts(self, tables: List[str]) -> Dict[str, str]:
+        """Get record counts for multiple tables"""
+        if self.use_supabase:
+            return self.supabase_client.get_table_counts_supabase(tables)
+        else:
+            return self.postgrest_client.get_table_counts(tables)
 
 
 def create_client(prefer_supabase: bool = False) -> UnifiedClient:

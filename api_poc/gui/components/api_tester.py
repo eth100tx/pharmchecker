@@ -23,7 +23,7 @@ def render_api_tester(client):
                 st.error("❌ API connection failed")
     
     with col2:
-        st.info(f"Testing connection to: {client.base_url}")
+        st.info(f"Testing connection to: {client.get_active_api_url()}")
     
     # Raw endpoint testing
     st.subheader("Raw Endpoint Testing")
@@ -70,7 +70,7 @@ def render_api_tester(client):
     # Execute request
     if st.button("Send Request", type="primary"):
         try:
-            url = f"{client.base_url}{custom_endpoint}"
+            url = f"{client.get_active_api_url()}{custom_endpoint}"
             
             # Prepare headers
             request_headers = {
@@ -196,27 +196,45 @@ def render_quick_queries(client):
             try:
                 tables = ['datasets', 'pharmacies', 'search_results', 'validated_overrides']
                 
-                st.write("**Record Counts:**")
-                for table in tables:
-                    try:
-                        # Use Prefer header to get count
-                        url = f"{client.base_url}/{table}"
-                        headers = {'Prefer': 'count=exact'}
-                        response = requests.head(url, headers=headers)
-                        
-                        count_range = response.headers.get('Content-Range', '')
-                        if '/' in count_range:
-                            count = count_range.split('/')[-1]
-                            st.write(f"• {table}: {count}")
-                        else:
-                            st.write(f"• {table}: Unable to get count")
-                    except:
-                        st.write(f"• {table}: Error")
+                # Check if client has the new method
+                if hasattr(client, 'get_table_counts'):
+                    st.write("**Record Counts:**")
+                    counts = client.get_table_counts(tables)
+                    for table, count in counts.items():
+                        st.write(f"• {table}: {count}")
+                else:
+                    # Fallback to old method
+                    st.write("**Record Counts:**")
+                    for table in tables:
+                        try:
+                            if client.use_supabase:
+                                # Use Supabase client with proper headers
+                                url = f"{client.get_active_api_url()}/{table}"
+                                headers = {
+                                    'apikey': client.supabase_client.anon_key,
+                                    'Authorization': f'Bearer {client.supabase_client.anon_key}',
+                                    'Prefer': 'count=exact'
+                                }
+                                response = requests.head(url, headers=headers, timeout=10)
+                            else:
+                                # Use PostgREST directly
+                                url = f"{client.get_active_api_url()}/{table}"
+                                headers = {'Prefer': 'count=exact'}
+                                response = requests.head(url, headers=headers, timeout=10)
+                            
+                            count_range = response.headers.get('Content-Range', '')
+                            if '/' in count_range:
+                                count = count_range.split('/')[-1]
+                                st.write(f"• {table}: {count}")
+                            else:
+                                st.write(f"• {table}: Unable to get count")
+                        except Exception as e:
+                            st.write(f"• {table}: Error ({str(e)[:50]})")
             except Exception as e:
                 st.error(f"Error: {e}")
     
     with col3:
-        if st.button("🏥 Sample Data", use_container_width=True):
+        if st.button("👁️ Peek Data", use_container_width=True):
             try:
                 # Get one record from each main table
                 tables = ['datasets', 'pharmacies', 'search_results']
@@ -225,11 +243,11 @@ def render_quick_queries(client):
                     try:
                         data = client.get_table_data(table, limit=1)
                         if data:
-                            st.write(f"**Sample {table}:**")
+                            st.write(f"**Peek {table}:**")
                             st.json(data[0])
                         else:
                             st.write(f"**{table}:** No data")
                     except:
-                        st.write(f"**{table}:** Error getting sample")
+                        st.write(f"**{table}:** Error getting peek")
             except Exception as e:
                 st.error(f"Error: {e}")
