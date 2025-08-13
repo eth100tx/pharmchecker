@@ -63,7 +63,7 @@ class ScoringEngine(BaseImporter):
         Returns:
             List of (pharmacy_id, result_id) tuples needing scores
         """
-        with self.conn.cursor() as cur:
+        with self.db.conn.cursor() as cur:
             # Get all comprehensive results for these datasets
             cur.execute("""
                 SELECT pharmacy_id, result_id, score_overall
@@ -159,7 +159,7 @@ class ScoringEngine(BaseImporter):
     
     def _get_dataset_ids(self, states_tag: str, pharmacies_tag: str) -> Optional[Tuple[int, int]]:
         """Get dataset IDs for the given tags"""
-        with self.conn.cursor() as cur:
+        with self.db.conn.cursor() as cur:
             cur.execute("""
                 SELECT 
                     (SELECT id FROM datasets WHERE kind='states' AND tag=%s) as states_id,
@@ -247,7 +247,7 @@ class ScoringEngine(BaseImporter):
     
     def _get_pharmacy_address(self, pharmacy_id: int) -> Optional[Address]:
         """Get pharmacy address for scoring"""
-        with self.conn.cursor() as cur:
+        with self.db.conn.cursor() as cur:
             cur.execute("""
                 SELECT address, suite, city, state, zip 
                 FROM pharmacies 
@@ -268,7 +268,7 @@ class ScoringEngine(BaseImporter):
     
     def _get_single_result(self, result_id: int) -> Optional[Dict[str, Any]]:
         """Get a specific search result by ID"""
-        with self.conn.cursor() as cur:
+        with self.db.conn.cursor() as cur:
             cur.execute("""
                 SELECT id, search_name, search_state, address, city, state, zip, 
                        license_number, license_status, result_status
@@ -304,7 +304,7 @@ class ScoringEngine(BaseImporter):
         if not scores:
             return
         
-        with self.conn.cursor() as cur:
+        with self.db.conn.cursor() as cur:
             from psycopg2.extras import execute_values
             
             try:
@@ -327,7 +327,7 @@ class ScoringEngine(BaseImporter):
                     template="(%s, %s, %s, %s, %s, %s, %s, %s)"
                 )
                 
-                self.conn.commit()
+                self.db.commit()
                 self.logger.debug(f"Upserted {len(scores)} scores to database")
                 
             except Exception as e:
@@ -346,7 +346,7 @@ class ScoringEngine(BaseImporter):
         Returns:
             Dict with scoring statistics
         """
-        with self.conn.cursor() as cur:
+        with self.db.conn.cursor() as cur:
             # Get dataset IDs
             dataset_ids = self._get_dataset_ids(states_tag, pharmacies_tag)
             if not dataset_ids:

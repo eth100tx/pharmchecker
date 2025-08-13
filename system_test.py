@@ -31,7 +31,8 @@ from imports.scoring import ScoringEngine
 import psycopg2
 from psycopg2.extras import RealDictCursor
 
-TEST_TAG = "system_test"
+PHARMACIES_TAG = "system_test_pharmacies"
+STATES_TAG = "system_test_states"
 
 class SystemTest:
     """Complete PharmChecker system test"""
@@ -133,18 +134,28 @@ class SystemTest:
         try:
             with psycopg2.connect(**self.db_config) as conn:
                 with conn.cursor() as cur:
-                    # Delete in dependency order
-                    cur.execute("DELETE FROM match_scores WHERE states_dataset_id IN (SELECT id FROM datasets WHERE tag = %s) OR pharmacies_dataset_id IN (SELECT id FROM datasets WHERE tag = %s)", (TEST_TAG, TEST_TAG))
-                    cur.execute("DELETE FROM search_results WHERE dataset_id IN (SELECT id FROM datasets WHERE tag = %s)", (TEST_TAG,))
-                    cur.execute("DELETE FROM pharmacies WHERE dataset_id IN (SELECT id FROM datasets WHERE tag = %s)", (TEST_TAG,))
-                    cur.execute("DELETE FROM validated_overrides WHERE dataset_id IN (SELECT id FROM datasets WHERE tag = %s)", (TEST_TAG,))
-                    cur.execute("DELETE FROM images WHERE dataset_id IN (SELECT id FROM datasets WHERE tag = %s)", (TEST_TAG,))
-                    cur.execute("DELETE FROM datasets WHERE tag = %s", (TEST_TAG,))
+                    # Delete in dependency order for both test tags
+                    test_tags = [PHARMACIES_TAG, STATES_TAG]
                     
-                    rows_deleted = cur.rowcount
+                    # Delete scores first (references both datasets)
+                    cur.execute("""
+                        DELETE FROM match_scores 
+                        WHERE states_dataset_id IN (SELECT id FROM datasets WHERE tag = ANY(%s))
+                           OR pharmacies_dataset_id IN (SELECT id FROM datasets WHERE tag = ANY(%s))
+                    """, (test_tags, test_tags))
+                    
+                    # Delete dependent data
+                    cur.execute("DELETE FROM search_results WHERE dataset_id IN (SELECT id FROM datasets WHERE tag = ANY(%s))", (test_tags,))
+                    cur.execute("DELETE FROM pharmacies WHERE dataset_id IN (SELECT id FROM datasets WHERE tag = ANY(%s))", (test_tags,))
+                    cur.execute("DELETE FROM validated_overrides WHERE dataset_id IN (SELECT id FROM datasets WHERE tag = ANY(%s))", (test_tags,))
+                    cur.execute("DELETE FROM images WHERE dataset_id IN (SELECT id FROM datasets WHERE tag = ANY(%s))", (test_tags,))
+                    
+                    # Delete datasets themselves
+                    cur.execute("DELETE FROM datasets WHERE tag = ANY(%s)", (test_tags,))
+                    
                 conn.commit()
             
-            self.log_step("Clean existing test data", True, f"Cleaned up any existing {TEST_TAG} data")
+            self.log_step("Clean existing test data", True, f"Cleaned up any existing system test data")
             
         except Exception as e:
             self.log_step("Clean existing test data", False, f"Error: {e}")
@@ -213,10 +224,10 @@ class SystemTest:
                 temp_csv = f.name
             
             # Import using PharmacyImporter
-            with PharmacyImporter(self.db_config) as importer:
+            with PharmacyImporter(backend='postgresql', conn_params=self.db_config) as importer:
                 success = importer.import_csv(
                     filepath=temp_csv,
-                    tag=TEST_TAG,
+                    tag=PHARMACIES_TAG,
                     created_by='system_test',
                     description='System test pharmacy data'
                 )
@@ -328,7 +339,7 @@ class SystemTest:
                         ON CONFLICT (kind, tag) DO UPDATE 
                         SET description = EXCLUDED.description
                         RETURNING id
-                    """, ('states', TEST_TAG, 'System test state search data', 'system_test'))
+                    """, ('states', STATES_TAG, 'System test state search data', 'system_test'))
                     
                     dataset_id = cur.fetchone()[0]
                     
@@ -371,6 +382,24 @@ class SystemTest:
         except Exception as e:
             self.log_step("Import state search data", False, f"Error: {e}")
     
+    def check_missing_scores(self) -> Dict:
+        """Check for missing scores (should find pairs that need scoring)"""
+        try:
+            with ScoringEngine(backend='postgresql', conn_params=self.db_config) as engine:
+                missing_pairs = engine.find_missing_scores(STATES_TAG, PHARMACIES_TAG, limit=100)
+                
+                self.log_step("Check missing scores", True, 
+                             f"Found {len(missing_pairs)} pharmacy/result pairs that need scores")
+                
+                return {
+                    'missing_pairs': missing_pairs,
+                    'count': len(missing_pairs)
+                }
+                
+        except Exception as e:
+            self.log_step("Check missing scores", False, f"Error: {e}")
+            return {'missing_pairs': [], 'count': 0}
+
     def query_initial_results(self) -> List[Dict]:
         """Query initial results (should show no scores)"""
         try:
@@ -379,7 +408,7 @@ class SystemTest:
                     cur.execute("""
                         SELECT * FROM get_all_results_with_context(%s, %s, %s)
                         ORDER BY pharmacy_name, search_state
-                    """, (TEST_TAG, TEST_TAG, None))
+                    """, (STATES_TAG, PHARMACIES_TAG, None))
                     
                     comprehensive_results = cur.fetchall()
             
@@ -402,19 +431,19 @@ class SystemTest:
     def run_scoring_engine(self) -> Dict:
         """Run the lazy scoring engine"""
         try:
-            with ScoringEngine(self.db_config) as engine:
+            with ScoringEngine(backend='postgresql', conn_params=self.db_config) as engine:
                 # Get statistics before
-                stats_before = engine.get_scoring_stats(TEST_TAG, TEST_TAG)
+                stats_before = engine.get_scoring_stats(STATES_TAG, PHARMACIES_TAG)
                 
                 if 'error' in stats_before:
                     self.log_step("Run scoring engine", False, f"Stats error: {stats_before['error']}")
                     return {}
                 
                 # Run scoring
-                result = engine.compute_scores(TEST_TAG, TEST_TAG, batch_size=10)
+                result = engine.compute_scores(STATES_TAG, PHARMACIES_TAG, batch_size=10)
                 
                 # Get statistics after
-                stats_after = engine.get_scoring_stats(TEST_TAG, TEST_TAG)
+                stats_after = engine.get_scoring_stats(STATES_TAG, PHARMACIES_TAG)
                 
                 self.log_step("Run scoring engine", True, 
                              f"Computed {result['scores_computed']} scores in {result['batches_processed']} batches")
@@ -429,6 +458,43 @@ class SystemTest:
             self.log_step("Run scoring engine", False, f"Error: {e}")
             return {}
     
+    def verify_scores_computed(self) -> Dict:
+        """Verify that scores have been computed for all viable pairs"""
+        try:
+            with ScoringEngine(backend='postgresql', conn_params=self.db_config) as engine:
+                missing_pairs = engine.find_missing_scores(STATES_TAG, PHARMACIES_TAG, limit=100)
+                
+                # Check if missing pairs are actually "no results found" cases
+                viable_missing = []
+                with psycopg2.connect(**self.db_config) as conn:
+                    with conn.cursor() as cur:
+                        for pharmacy_id, result_id in missing_pairs:
+                            cur.execute("""
+                                SELECT license_number FROM search_results 
+                                WHERE id = %s AND license_number IS NOT NULL
+                            """, (result_id,))
+                            if cur.fetchone():  # Has actual license data
+                                viable_missing.append((pharmacy_id, result_id))
+                
+                success = len(viable_missing) == 0
+                message = f"Found {len(missing_pairs)} total pairs without scores"
+                if len(viable_missing) < len(missing_pairs):
+                    message += f" ({len(viable_missing)} viable pairs need scoring, {len(missing_pairs) - len(viable_missing)} are 'no results found' cases)"
+                
+                self.log_step("Verify scores computed", success, message)
+                
+                return {
+                    'remaining_missing': missing_pairs,
+                    'viable_missing': viable_missing,
+                    'count': len(missing_pairs),
+                    'viable_count': len(viable_missing),
+                    'all_computed': success
+                }
+                
+        except Exception as e:
+            self.log_step("Verify scores computed", False, f"Error: {e}")
+            return {'remaining_missing': [], 'viable_missing': [], 'count': 0, 'viable_count': 0, 'all_computed': False}
+    
     def query_final_results(self) -> List[Dict]:
         """Query final results (should show computed scores)"""
         try:
@@ -437,7 +503,7 @@ class SystemTest:
                     cur.execute("""
                         SELECT * FROM get_all_results_with_context(%s, %s, %s)
                         ORDER BY pharmacy_name, search_state
-                    """, (TEST_TAG, TEST_TAG, None))
+                    """, (STATES_TAG, PHARMACIES_TAG, None))
                     
                     comprehensive_results = cur.fetchall()
             
@@ -469,7 +535,8 @@ class SystemTest:
         
         # Test Summary
         print(f"\nTest Summary:")
-        print(f"  Tag: {TEST_TAG}")
+        print(f"  Pharmacy Tag: {PHARMACIES_TAG}")
+        print(f"  States Tag: {STATES_TAG}")
         print(f"  Start Time: {self.test_results['start_time']}")
         print(f"  Duration: {datetime.now() - self.test_results['start_time']}")
         print(f"  Overall Success: {'✅ PASS' if self.test_results['success'] else '❌ FAIL'}")
@@ -563,20 +630,21 @@ class SystemTest:
         print("\n" + "="*80)
     
     def run_full_test(self):
-        """Run the complete end-to-end system test"""
+        """Run the complete end-to-end system test following app.py workflow"""
         print("PharmChecker End-to-End System Test")
         print("="*50)
         
         # Step 1: Clean existing data
         self.clean_test_data()
         
-        # Step 2: Database functions already updated externally
-        
-        # Step 3: Import pharmacy data
+        # Step 2: Import pharmacy data (separate tag)
         self.import_pharmacy_data()
         
-        # Step 4: Import state search data
+        # Step 3: Import state search data (separate tag)  
         self.import_state_data()
+        
+        # Step 4: Check missing scores (should find pairs that need scoring)
+        missing_info = self.check_missing_scores()
         
         # Step 5: Query initial results (no scores)
         initial_results = self.query_initial_results()
@@ -584,11 +652,18 @@ class SystemTest:
         # Step 6: Run scoring engine
         scoring_stats = self.run_scoring_engine()
         
-        # Step 7: Query final results (with scores)
+        # Step 7: Verify scores computed (should find no remaining missing scores)
+        verification_info = self.verify_scores_computed()
+        
+        # Step 8: Query final results (with scores)
         final_results = self.query_final_results()
         
-        # Step 8: Generate comprehensive report
+        # Step 9: Generate comprehensive report
         self.generate_report(initial_results, final_results, scoring_stats)
+        
+        # Step 10: Clean up test data
+        print(f"\nCleaning up test data (tags: {PHARMACIES_TAG}, {STATES_TAG})...")
+        self.clean_test_data()
         
         return self.test_results
 
