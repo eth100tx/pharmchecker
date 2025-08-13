@@ -1,12 +1,22 @@
 # PharmChecker Makefile
 # Convenient commands for development and testing
 
-.PHONY: help clean_states import_test_states import_test_states2 clean_all setup status migrate
+# Backend configuration - set BACKEND=supabase to use Supabase, default is postgresql
+BACKEND ?= postgresql
+PYTHON_BACKEND_ARG := $(if $(filter supabase,$(BACKEND)),--backend supabase,--backend postgresql)
+
+.PHONY: help clean_states import_test_states import_test_states2 clean_all setup status migrate backend_info
 
 # Default target
 help:
 	@echo "PharmChecker Development Commands"
 	@echo "================================="
+	@echo ""
+	@echo "Backend Configuration:"
+	@echo "  Current backend: $(BACKEND)"
+	@echo "  backend_info       - Show current backend configuration"
+	@echo "  BACKEND=postgresql - Use local PostgreSQL (default)"
+	@echo "  BACKEND=supabase   - Use Supabase cloud database"
 	@echo ""
 	@echo "Database Management:"
 	@echo "  clean_states        - Remove all search data (preserves pharmacies)"
@@ -28,56 +38,73 @@ help:
 	@echo "Examples:"
 	@echo "  make clean_states import_test_states  # Clean and import baseline"
 	@echo "  make status                           # Check current data"
+	@echo "  BACKEND=supabase make import_pharmacies  # Import to Supabase"
+	@echo "  BACKEND=postgresql make status        # Check PostgreSQL data"
+
+# Show backend configuration
+backend_info:
+	@echo "📡 Backend Configuration"
+	@echo "======================="
+	@echo "Active Backend: $(BACKEND)"
+	@echo "Python Args: $(PYTHON_BACKEND_ARG)"
+	@echo ""
+	@if [ "$(BACKEND)" = "supabase" ]; then \
+		echo "🌐 Supabase Configuration:"; \
+		. ./.env 2>/dev/null && echo "  SUPABASE_URL: $${SUPABASE_URL:-Not set}" || echo "  SUPABASE_URL: Not set"; \
+		. ./.env 2>/dev/null && [ -n "$${SUPABASE_SERVICE_KEY}" ] && echo "  SUPABASE_SERVICE_KEY: Set (hidden)" || echo "  SUPABASE_SERVICE_KEY: Not set"; \
+	else \
+		echo "🗄️  PostgreSQL Configuration:"; \
+		. ./.env 2>/dev/null && echo "  DB_HOST: $${DB_HOST:-localhost}" || echo "  DB_HOST: localhost"; \
+		. ./.env 2>/dev/null && echo "  DB_NAME: $${DB_NAME:-pharmchecker}" || echo "  DB_NAME: pharmchecker"; \
+		. ./.env 2>/dev/null && echo "  DB_USER: $${DB_USER:-postgres}" || echo "  DB_USER: postgres"; \
+	fi
 
 # Clean search data only (preserve pharmacies)
 clean_states:
-	@echo "🧹 Cleaning search database..."
-	@python3 clean_search_db.py
+	@echo "🧹 Cleaning search database ($(BACKEND))..."
+	@python3 clean_search_db.py $(PYTHON_BACKEND_ARG)
 
 # Import states_baseline data
 import_test_states:
-	@echo "📥 Importing states_baseline..."
-	@python3 -c "\
-import os; \
-from pathlib import Path; \
-from dotenv import load_dotenv; \
-load_dotenv(); \
-from imports.states import StateImporter; \
-importer = StateImporter(); \
-success = importer.import_directory('data/states_baseline', tag='states_baseline', created_by='makefile_user', description='states_baseline test data'); \
-print('✅ Import successful!' if success else '❌ Import failed!')"
+	@echo "📥 Importing states_baseline to $(BACKEND)..."
+	@python3 -m imports.api_importer states \
+		data/states_baseline \
+		states_baseline \
+		--backend $(BACKEND) \
+		--created-by makefile_user \
+		--description "states_baseline test data" \
+		--batch-size 1
 
 # Import states_baseline2 data  
 import_test_states2:
-	@echo "📥 Importing states_baseline2..."
+	@echo "📥 Importing states_baseline2 to $(BACKEND)..."
 	@python3 -c "\
 import os; \
 from pathlib import Path; \
 from dotenv import load_dotenv; \
 load_dotenv(); \
 from imports.states import StateImporter; \
-importer = StateImporter(); \
+backend = '$(BACKEND)'; \
+importer = StateImporter(backend=backend); \
 success = importer.import_directory('data/states_baseline2', created_by='makefile_user', description='states_baseline2 test data with Empower'); \
 print('✅ Import successful!' if success else '❌ Import failed!')"
 
 # Import pharmacy data
 import_pharmacies:
-	@echo "📥 Importing pharmacy data..."
-	@python3 -c "\
-import os; \
-from pathlib import Path; \
-from dotenv import load_dotenv; \
-load_dotenv(); \
-from imports.pharmacies import PharmacyImporter; \
-importer = PharmacyImporter(); \
-success = importer.import_csv('data/pharmacies_new.csv', tag='test_pharmacies', created_by='makefile_user', description='Converted pharmacy test data'); \
-print('✅ Import successful!' if success else '❌ Import failed!')"
+	@echo "📥 Importing pharmacy data to $(BACKEND)..."
+	@python3 -m imports.api_importer pharmacies \
+		data/pharmacies_new.csv \
+		test_pharmacies_make \
+		--backend $(BACKEND) \
+		--created-by makefile_user \
+		--description "Converted pharmacy test data" \
+		--batch-size 1
 
 # Database status
 status:
-	@echo "📊 Database Status"
-	@echo "=================="
-	@python3 show_status.py
+	@echo "📊 Database Status ($(BACKEND))"
+	@echo "================================"
+	@python3 show_status.py $(PYTHON_BACKEND_ARG)
 
 # Full database setup
 setup:
@@ -118,4 +145,4 @@ reset_merge:
 	@python3 reset_for_merge.py
 
 # Development workflow - clean, import both datasets, show status
-dev: clean_states import_pharmacies import_test_states import_test_states2 status
+dev: backend_info clean_states import_pharmacies import_test_states import_test_states2 status

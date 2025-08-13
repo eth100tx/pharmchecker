@@ -147,10 +147,14 @@ pharmchecker/
 │   └── supabase_setup_consolidated.sql  # Complete Supabase setup
 ├── system_test.py             # End-to-end validation
 ├── imports/                   # Data import system
-│   ├── pharmacies.py          # CSV pharmacy importer
-│   ├── states.py              # JSON search results importer
+│   ├── api_importer.py        # API-based importer (PostgreSQL/Supabase)
+│   ├── pharmacies.py          # Legacy CSV pharmacy importer
+│   ├── states.py              # Legacy JSON search results importer
 │   ├── scoring.py             # Address matching engine
 │   └── validated.py           # Manual validation importer
+├── api_poc/                   # API and GUI proof of concept
+│   ├── gui/                   # Streamlit GUI for dual backend
+│   └── postgrest/             # PostgREST API server
 ├── utils/                     # GUI utilities
 │   ├── database.py            # Database operations
 │   └── display.py             # UI components
@@ -160,13 +164,21 @@ pharmchecker/
 
 ## Typical Workflow
 
-1. **Import pharmacy data**: `python -m imports.pharmacies data/pharmacies.csv "jan_2024"`
-2. **Import state searches**: `python -m imports.states data/FL_searches/ "fl_jan_2024"`
+1. **Import pharmacy data**: `make import_pharmacies` or `BACKEND=supabase make import_pharmacies`
+2. **Import state searches**: `make import_test_states` or `BACKEND=supabase make import_test_states`
 3. **Launch web interface**: `streamlit run app.py`
 4. **Select datasets**: Choose pharmacy and state datasets in sidebar
 5. **Review results**: System auto-computes address match scores (85+ = match)
 6. **Validate findings**: Mark verified results with reasons
 7. **Export report**: Download CSV with all results and validations
+
+### API POC Workflow (Advanced)
+
+1. **Start PostgREST API**: `cd api_poc/postgrest && ./postgrest postgrest.conf`
+2. **Launch API GUI**: `cd api_poc/gui && streamlit run app.py --server.port 8502`
+3. **Access dual backend**: Switch between PostgreSQL and Supabase in GUI
+4. **Import via API**: Use Data Manager page for file uploads and transfers
+5. **Comprehensive results**: Query both backends through unified interface
 
 ## Key Features
 
@@ -212,10 +224,17 @@ python migrations/migrate.py --target supabase # Apply to Supabase (manual)
 make dev            # Import all test data
 python system_test.py    # Run end-to-end test
 
-# Data import
-python -m imports.pharmacies <csv_file> <tag>
-python -m imports.states <json_dir> <tag>
-python -m imports.validated <csv_file> <tag>  
+# Data import (API-based - works with both backends)
+make import_pharmacies                    # Import pharmacy data (PostgreSQL)
+BACKEND=supabase make import_pharmacies   # Import pharmacy data (Supabase)
+make import_test_states                   # Import state search results (PostgreSQL)
+BACKEND=supabase make import_test_states  # Import state search results (Supabase)
+
+# Direct API import (advanced usage)
+python -m imports.api_importer pharmacies <csv_file> <tag> --backend postgresql
+python -m imports.api_importer pharmacies <csv_file> <tag> --backend supabase
+python -m imports.api_importer states <states_dir> <tag> --backend postgresql
+python -m imports.api_importer states <states_dir> <tag> --backend supabase
 
 # Testing
 python test_scoring.py   # Test address matching algorithm
@@ -251,9 +270,11 @@ python test_gui.py       # Test web interface components
 
 - **Database**: PostgreSQL 13+ with pg_trgm extension OR Supabase (cloud PostgreSQL)
 - **Backend**: Python 3.8+, psycopg2, SQLAlchemy  
+- **API Layer**: PostgREST (local) OR Supabase REST API (cloud)
 - **Web Framework**: Streamlit 1.28+ with Plotly charts
 - **Data Processing**: pandas, RapidFuzz (address matching)
-- **Dependencies**: python-dotenv, python-slugify
+- **Import System**: REST API-based importers for dual backend support
+- **Dependencies**: python-dotenv, python-slugify, requests
 - **Migration System**: Custom unified migration runner for both backends
 - **Testing**: Built-in test suite (system_test.py)
 

@@ -4,26 +4,43 @@ Provides shared database functionality for all importers
 """
 import logging
 from typing import Dict, Any, List, Tuple, Optional
-import psycopg2
-from psycopg2.extras import execute_values
-from config import get_db_config
+from .db_adapter import DatabaseAdapter, get_default_adapter, create_adapter
 
 class BaseImporter:
     """Base class for all PharmChecker data importers"""
     
-    def __init__(self, conn_params: Optional[Dict[str, Any]] = None):
+    def __init__(self, db_adapter: Optional[DatabaseAdapter] = None, backend: str = None, conn_params: Optional[Dict[str, Any]] = None):
         """
         Initialize base importer
         
         Args:
-            conn_params: Database connection parameters. If None, uses config.
+            db_adapter: Database adapter instance. If None, creates default adapter.
+            backend: Backend type ('postgresql' or 'supabase'). Used if db_adapter is None.
+            conn_params: Database connection parameters. Used for PostgreSQL backend.
         """
-        if conn_params is None:
-            conn_params = get_db_config()
+        if db_adapter is not None:
+            self.db = db_adapter
+        elif backend is not None:
+            if backend.lower() == 'postgresql':
+                self.db = create_adapter("postgresql", conn_params=conn_params)
+            else:
+                self.db = create_adapter(backend)
+        else:
+            self.db = get_default_adapter()
             
-        self.conn_params = conn_params
-        self.conn = psycopg2.connect(**conn_params)
         self.logger = logging.getLogger(self.__class__.__name__)
+        
+        # Establish connection
+        try:
+            if not self.db.connect():
+                raise Exception("Failed to connect to database")
+        except NotImplementedError as e:
+            # For Supabase, we expect this - it should use the unified client instead
+            if backend and backend.lower() == 'supabase':
+                self.logger.warning("Supabase operations should use unified client, not direct importer")
+                raise Exception("Use unified client for Supabase operations") from e
+            else:
+                raise
         
     def __enter__(self):
         """Context manager entry"""
@@ -35,8 +52,7 @@ class BaseImporter:
     
     def close(self):
         """Close database connection"""
-        if self.conn:
-            self.conn.close()
+        self.db.close()
     
     def create_dataset(self, kind: str, tag: str, description: str = None, 
                       created_by: str = None) -> int:
@@ -55,14 +71,13 @@ class BaseImporter:
         # Find unique tag if conflicts exist
         unique_tag = self._find_unique_tag(kind, tag)
         
-        with self.conn.cursor() as cur:
-            cur.execute("""
-                INSERT INTO datasets (kind, tag, description, created_by)
-                VALUES (%s, %s, %s, %s)
-                RETURNING id
-            """, (kind, unique_tag, description, created_by))
-            dataset_id = cur.fetchone()[0]
-            self.conn.commit()
+        result = self.db.execute_one("""
+            INSERT INTO datasets (kind, tag, description, created_by)
+            VALUES (%s, %s, %s, %s)
+            RETURNING id
+        """, (kind, unique_tag, description, created_by))
+        dataset_id = result[0]
+        self.db.commit()
             
         if unique_tag != tag:
             self.logger.info(f"Dataset {kind}:{tag} -> {unique_tag} (made unique) -> ID {dataset_id}")
@@ -82,7 +97,7 @@ class BaseImporter:
             Unique tag name
         """
         # Check if base tag exists
-        existing = self.execute_one(
+        existing = self.db.execute_one(
             "SELECT id FROM datasets WHERE kind = %s AND tag = %s",
             (kind, base_tag)
         )
@@ -94,7 +109,7 @@ class BaseImporter:
         counter = 2
         while True:
             candidate_tag = f"{base_tag} ({counter})"
-            existing = self.execute_one(
+            existing = self.db.execute_one(
                 "SELECT id FROM datasets WHERE kind = %s AND tag = %s",
                 (kind, candidate_tag)
             )
@@ -125,64 +140,7 @@ class BaseImporter:
         Returns:
             Number of rows successfully inserted
         """
-        if not data:
-            self.logger.info("No data to insert")
-            return 0
-            
-        template = f"({','.join(['%s'] * len(columns))})"
-        base_query = f"INSERT INTO {table} ({','.join(columns)}) VALUES %s"
-        
-        if on_conflict:
-            query = f"{base_query} {on_conflict}"
-        else:
-            query = base_query
-        
-        total_inserted = 0
-        failed_batches = 0
-        
-        with self.conn.cursor() as cur:
-            for i in range(0, len(data), batch_size):
-                batch = data[i:i + batch_size]
-                batch_num = i // batch_size + 1
-                
-                try:
-                    execute_values(
-                        cur,
-                        query,
-                        batch,
-                        template=template
-                    )
-                    self.conn.commit()
-                    total_inserted += len(batch)
-                    self.logger.info(f"Batch {batch_num}: inserted {len(batch)} rows")
-                    
-                except Exception as e:
-                    self.logger.error(f"Batch {batch_num} failed: {e}")
-                    self.conn.rollback()
-                    failed_batches += 1
-                    
-                    # Try individual inserts to isolate the problem
-                    if len(batch) > 1:
-                        self.logger.info(f"Trying individual inserts for batch {batch_num}")
-                        individual_success = 0
-                        for row in batch:
-                            try:
-                                cur.execute(
-                                    query.replace('%s', template),
-                                    (row,)
-                                )
-                                self.conn.commit()
-                                individual_success += 1
-                            except Exception as row_error:
-                                self.logger.error(f"Row failed: {row_error}")
-                                self.conn.rollback()
-                        
-                        if individual_success > 0:
-                            total_inserted += individual_success
-                            self.logger.info(f"Batch {batch_num}: {individual_success} individual inserts succeeded")
-        
-        self.logger.info(f"Total inserted: {total_inserted} rows, {failed_batches} batches failed")
-        return total_inserted
+        return self.db.batch_insert(table, columns, data, batch_size, on_conflict)
     
     def execute_query(self, query: str, params: Tuple = None) -> List[Tuple]:
         """
@@ -195,9 +153,7 @@ class BaseImporter:
         Returns:
             List of result tuples
         """
-        with self.conn.cursor() as cur:
-            cur.execute(query, params)
-            return cur.fetchall()
+        return self.db.execute_query(query, params)
     
     def execute_one(self, query: str, params: Tuple = None) -> Optional[Tuple]:
         """
@@ -210,9 +166,7 @@ class BaseImporter:
         Returns:
             First result tuple or None
         """
-        with self.conn.cursor() as cur:
-            cur.execute(query, params)
-            return cur.fetchone()
+        return self.db.execute_one(query, params)
     
     def execute_statement(self, statement: str, params: Tuple = None) -> int:
         """
@@ -225,11 +179,7 @@ class BaseImporter:
         Returns:
             Number of affected rows
         """
-        with self.conn.cursor() as cur:
-            cur.execute(statement, params)
-            affected_rows = cur.rowcount
-            self.conn.commit()
-            return affected_rows
+        return self.db.execute_statement(statement, params)
     
     def get_dataset_id(self, kind: str, tag: str) -> Optional[int]:
         """
@@ -242,7 +192,7 @@ class BaseImporter:
         Returns:
             Dataset ID or None if not found
         """
-        result = self.execute_one(
+        result = self.db.execute_one(
             "SELECT id FROM datasets WHERE kind = %s AND tag = %s",
             (kind, tag)
         )
@@ -273,7 +223,7 @@ class BaseImporter:
             """
             params = None
         
-        results = self.execute_query(query, params)
+        results = self.db.execute_query(query, params)
         
         datasets = []
         for row in results:
@@ -296,7 +246,7 @@ class BaseImporter:
             dataset_id: Dataset ID to clean up
         """
         try:
-            self.execute_statement("DELETE FROM datasets WHERE id = %s", (dataset_id,))
+            self.db.execute_statement("DELETE FROM datasets WHERE id = %s", (dataset_id,))
             self.logger.info(f"Cleaned up failed dataset {dataset_id}")
         except Exception as e:
             self.logger.error(f"Failed to cleanup dataset {dataset_id}: {e}")
@@ -314,7 +264,7 @@ class BaseImporter:
         stats = {}
         
         # Get dataset info
-        dataset_info = self.execute_one(
+        dataset_info = self.db.execute_one(
             "SELECT kind, tag FROM datasets WHERE id = %s",
             (dataset_id,)
         )
@@ -328,7 +278,7 @@ class BaseImporter:
         
         # Count records based on dataset type
         if kind == 'pharmacies':
-            count = self.execute_one(
+            count = self.db.execute_one(
                 "SELECT COUNT(*) FROM pharmacies WHERE dataset_id = %s",
                 (dataset_id,)
             )[0]
@@ -336,13 +286,13 @@ class BaseImporter:
             
         elif kind == 'states':
             # Count total results in merged table
-            result_count = self.execute_one(
+            result_count = self.db.execute_one(
                 "SELECT COUNT(*) FROM search_results WHERE dataset_id = %s",
                 (dataset_id,)
             )[0]
             
             # Count unique searches (by search_name, search_state combination)
-            search_count = self.execute_one("""
+            search_count = self.db.execute_one("""
                 SELECT COUNT(DISTINCT (search_name, search_state)) 
                 FROM search_results 
                 WHERE dataset_id = %s
@@ -352,7 +302,7 @@ class BaseImporter:
             stats['results'] = result_count
             
         elif kind == 'validated':
-            count = self.execute_one(
+            count = self.db.execute_one(
                 "SELECT COUNT(*) FROM validated_overrides WHERE dataset_id = %s",
                 (dataset_id,)
             )[0]

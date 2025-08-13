@@ -13,6 +13,17 @@ from .base import BaseImporter
 class StateImporter(BaseImporter):
     """Importer for state board search results"""
     
+    def __init__(self, backend: str = None, db_adapter=None, conn_params=None):
+        """
+        Initialize state importer
+        
+        Args:
+            backend: Backend type ('postgresql' or 'supabase')
+            db_adapter: Database adapter instance
+            conn_params: Database connection parameters
+        """
+        super().__init__(db_adapter=db_adapter, backend=backend, conn_params=conn_params)
+    
     def import_json(self, filepath: str, tag: str, screenshot_dir: Optional[str] = None,
                    created_by: str = None, description: str = None) -> bool:
         """
