@@ -12,27 +12,27 @@ PharmChecker streamlines pharmacy license verification across multiple U.S. stat
 - **Validating** findings manually with audit trail support
 - **Exporting** verified results for compliance reporting
 
-**Key Features:** Dataset versioning, lazy scoring computation, multi-user sessions, natural key linking (no hardcoded IDs), comprehensive validation system with overrides.
+**Key Features:** Dual database support (PostgreSQL/Supabase), unified migration system, dataset versioning, lazy scoring computation, multi-user sessions, natural key linking (no hardcoded IDs), comprehensive validation system with overrides.
 
 ## Architecture Overview
 
 ```
-CSV/JSON Files → Import System → PostgreSQL Database → Scoring Engine → Web Interface
-                                       ↓
-                              Versioned Datasets + Screenshots + Validations
+CSV/JSON Files → Import System → Database (PostgreSQL/Supabase) → Scoring Engine → Web Interface
+                                            ↓
+                                  Versioned Datasets + Screenshots + Validations
 ```
 
-- **Database-first design** with PostgreSQL storing all datasets and computed scores
+- **Dual database support** with PostgreSQL (local) or Supabase (cloud) via unified migration system
 - **Lazy scoring system** computes address matches only when needed
-- **Multi-user support** with session management and authentication
+- **Multi-user support** with session management and authentication  
 - **Natural key linking** using pharmacy names/license numbers (not internal IDs)
 
 ## Quick Start
 
 ### Prerequisites
-- PostgreSQL 13+ with `pg_trgm` extension
-- Python 3.8+
-- 2GB free disk space for data and screenshots
+- **Database**: PostgreSQL 13+ with `pg_trgm` extension OR Supabase account
+- **Runtime**: Python 3.8+
+- **Storage**: 2GB free disk space for data and screenshots
 
 ### Installation
 
@@ -46,13 +46,22 @@ pip install -r requirements.txt
 
 # 3. Configure database
 cp .env.example .env
-# Edit .env with your PostgreSQL credentials:
-#   DB_HOST, DB_PORT, DB_NAME, DB_USER, DB_PASSWORD
+# Option A: Local PostgreSQL
+#   Edit DB_HOST, DB_PORT, DB_NAME, DB_USER, DB_PASSWORD
+# Option B: Supabase  
+#   Edit SUPABASE_URL, SUPABASE_SERVICE_KEY
 
 # 4. Initialize database
-python setup.py
+python setup.py                       # Auto-detects backend from .env
+# OR force specific backend:
+python setup.py --backend postgresql  # Force local PostgreSQL
+python setup.py --backend supabase    # Force Supabase
 
-# 5. Run system test to verify installation
+# 5. For Supabase: Manual SQL Setup Required
+# If using Supabase, run this SQL in your Supabase Dashboard:
+# Copy/paste: migrations/supabase_setup_consolidated.sql
+
+# 6. Run system test to verify installation
 python system_test.py
 ```
 
@@ -74,15 +83,68 @@ The web dashboard includes:
 - **Validation Tools** - Mark results as verified with reasons
 - **Export Functions** - Download results as CSV for reporting
 
+## Database Migration System
+
+PharmChecker includes a unified migration system that ensures identical database schemas across PostgreSQL and Supabase environments.
+
+### Migration Components
+
+```
+migrations/
+├── migrate.py                        # Universal migration runner
+├── migrations/                       # Versioned migration files
+│   ├── 20240101000000_initial_schema.sql
+│   ├── 20240101000001_comprehensive_functions.sql
+│   └── 20240101000002_indexes_and_performance.sql
+├── supabase_setup_consolidated.sql   # Complete Supabase setup (all-in-one)
+├── config.toml                       # Migration configuration
+└── README.md                         # Migration documentation
+```
+
+### Migration Commands
+
+```bash
+# Check migration status
+python migrations/migrate.py --status --target local     # PostgreSQL
+python migrations/migrate.py --status --target supabase  # Supabase (shows manual instructions)
+
+# Apply migrations
+python migrations/migrate.py --target local              # PostgreSQL (automatic)
+# For Supabase: Use consolidated SQL file in Dashboard
+
+# Setup with migrations (recommended)
+python setup.py                                          # Auto-detects and applies migrations
+```
+
+### Database Backend Detection
+
+The system automatically detects which database backend to use:
+
+1. **Supabase Detection**: If `SUPABASE_URL` and `SUPABASE_SERVICE_KEY` are set
+2. **PostgreSQL Detection**: If `DB_HOST` and related PostgreSQL vars are set  
+3. **Manual Override**: Use `--backend postgresql` or `--backend supabase`
+
+### Migration Features
+
+- ✅ **Version Tracking**: All migrations tracked in `pharmchecker_migrations` table
+- ✅ **Idempotent**: Safe to run multiple times, skips applied migrations
+- ✅ **Schema Consistency**: Identical tables, functions, indexes across backends
+- ✅ **Atomic Operations**: Each migration runs in a transaction
+- ✅ **Rollback Ready**: Migration tracking supports future rollback features
+
 ## Project Structure
 
 ```
 pharmchecker/
 ├── README.md                   # This file
 ├── requirements.txt            # Python dependencies
-├── setup.py                   # Database initialization
+├── setup.py                   # Database initialization (auto-detects backend)
 ├── app.py                     # Streamlit web interface
-├── schema.sql                 # Complete database schema
+├── schema.sql                 # Legacy database schema
+├── migrations/                # Unified migration system
+│   ├── migrate.py             # Migration runner for both backends
+│   ├── migrations/            # Versioned migration files
+│   └── supabase_setup_consolidated.sql  # Complete Supabase setup
 ├── system_test.py             # End-to-end validation
 ├── imports/                   # Data import system
 │   ├── pharmacies.py          # CSV pharmacy importer
@@ -135,9 +197,16 @@ pharmchecker/
 
 ```bash
 # Database management
-make setup           # Initialize database
+make setup           # Initialize database (uses auto-detection)
+python setup.py --backend postgresql  # Force PostgreSQL setup
+python setup.py --backend supabase    # Force Supabase setup
 make status          # Show current data
 make clean_all       # Full reset
+
+# Migration management
+python migrations/migrate.py --status          # Check migration status
+python migrations/migrate.py --target local    # Apply to PostgreSQL
+python migrations/migrate.py --target supabase # Apply to Supabase (manual)
 
 # Development workflow  
 make dev            # Import all test data
@@ -166,25 +235,26 @@ python test_gui.py       # Test web interface components
 ## System Requirements
 
 ### Minimum Requirements
-- PostgreSQL 13+ with admin access
-- Python 3.8+ with pip
-- 2GB available disk space
-- 4GB RAM
+- **Database**: PostgreSQL 13+ with admin access OR Supabase account
+- **Runtime**: Python 3.8+ with pip
+- **Storage**: 2GB available disk space
+- **Memory**: 4GB RAM
 
 ### Recommended for Production
-- PostgreSQL 14+ dedicated instance
-- Python 3.10+
-- 10GB+ disk space for screenshots
-- 8GB+ RAM for large datasets
-- Linux or macOS (Windows via WSL2)
+- **Database**: PostgreSQL 14+ dedicated instance OR Supabase Pro plan
+- **Runtime**: Python 3.10+
+- **Storage**: 10GB+ disk space for screenshots
+- **Memory**: 8GB+ RAM for large datasets
+- **Platform**: Linux or macOS (Windows via WSL2)
 
 ## Technology Stack
 
-- **Database**: PostgreSQL 13+ with pg_trgm extension
+- **Database**: PostgreSQL 13+ with pg_trgm extension OR Supabase (cloud PostgreSQL)
 - **Backend**: Python 3.8+, psycopg2, SQLAlchemy  
 - **Web Framework**: Streamlit 1.28+ with Plotly charts
 - **Data Processing**: pandas, RapidFuzz (address matching)
 - **Dependencies**: python-dotenv, python-slugify
+- **Migration System**: Custom unified migration runner for both backends
 - **Testing**: Built-in test suite (system_test.py)
 
 ## Project Status

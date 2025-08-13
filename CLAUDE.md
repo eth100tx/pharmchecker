@@ -17,15 +17,34 @@ UNIQUE(dataset_id, search_state, license_number)
 -- Latest timestamp wins for duplicates
 ```
 
-### MCP Database Access (Claude Only)
+### Unified Migration System - NEW
+The system now uses a **unified migration system** that supports both PostgreSQL and Supabase:
+- All schema changes go through versioned migrations in `migrations/` directory
+- `setup.py` automatically detects backend and applies migrations
+- Migration tracking table: `pharmchecker_migrations`
+- Never modify `schema.sql` directly - use migrations instead
+
+### Database Backend Support
+- **PostgreSQL (Local)**: Automatic migration via `python migrations/migrate.py`
+- **Supabase (Cloud)**: Manual SQL execution in Supabase Dashboard
+- **Auto-Detection**: `setup.py` chooses backend based on environment variables
+
+### MCP Database Access (Claude Only) 
 When debugging, use MCP tools - the application itself uses standard PostgreSQL connections via .env:
-- `mcp__postgres-prod__query` - Production database queries
-- `mcp__supabase__*` - Supabase integration
+- `mcp__postgres-prod__query` - Production database queries  
+- `mcp__supabase__*` - Supabase integration (read-only)
 - Application uses: psycopg2 with credentials from .env file
 
 ## Core Commands
 
 ```bash
+# Database setup and migrations
+python setup.py                              # Auto-detect backend and setup
+python setup.py --backend postgresql         # Force PostgreSQL setup
+python setup.py --backend supabase          # Force Supabase setup
+python migrations/migrate.py --status        # Check migration status
+python migrations/migrate.py --target local  # Apply PostgreSQL migrations
+
 # Quick development workflow
 make dev              # Import all test data
 make status           # Check database state
@@ -47,8 +66,11 @@ python -m imports.states <json_dir> <tag>
 
 ### Core Functionality
 - `app.py` - Main Streamlit web interface
-- `schema.sql` - Database tables (uses merged search_results)
-- `functions_comprehensive.sql` - Main database function: `get_all_results_with_context()`
+- `schema.sql` - Legacy database schema (DO NOT EDIT - use migrations)
+- `functions_comprehensive.sql` - Legacy functions (DO NOT EDIT - use migrations)
+- `migrations/` - **NEW**: Unified migration system for both backends
+- `migrations/migrate.py` - Migration runner
+- `migrations/supabase_setup_consolidated.sql` - Complete Supabase setup
 - `system_test.py` - End-to-end test (run this to verify changes)
 
 ### Import System
@@ -165,15 +187,21 @@ name,address,city,state,zip,state_licenses
 
 ✅ DO:
 - Run `system_test.py` after changes
+- Use the migration system for all database changes
 - Use existing import patterns
 - Keep the merged search_results table
 - Use lazy scoring
 - Cache results in session
-- ALWAYS ask the user if you want to change the schema.sql and get permission first
+- Use `python setup.py` for new database setup
+- Apply migrations via `migrations/migrate.py` for PostgreSQL
+- Use consolidated SQL file for Supabase setup
 
 ❌ DON'T:
+- Edit `schema.sql` or `functions_comprehensive.sql` directly (LEGACY FILES)
 - Split search_results table
 - Add global "active" flags
 - Compute all scores upfront
 - Query database repeatedly for same data
-- Modify schema without updating functions_comprehensive.sql
+- Use SUPABASE_ANON_KEY for admin operations (use SERVICE_KEY)
+- Bypass the migration system for schema changes
+- Mix direct SQL edits with migration system

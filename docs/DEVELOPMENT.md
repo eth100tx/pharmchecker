@@ -4,7 +4,9 @@
 
 ### Prerequisites
 
-1. **PostgreSQL 13+**
+1. **Database Backend** (Choose one)
+   
+   **Option A: PostgreSQL 13+ (Local Development)**
    ```bash
    # macOS
    brew install postgresql@14
@@ -16,6 +18,11 @@
    # Enable pg_trgm extension
    psql -U postgres -c "CREATE EXTENSION IF NOT EXISTS pg_trgm;"
    ```
+   
+   **Option B: Supabase (Cloud Development)**
+   - Create account at https://supabase.com
+   - Create new project
+   - Note your project URL and service key
 
 2. **Python 3.8+**
    ```bash
@@ -52,6 +59,8 @@
    ```
    
    Edit `.env` with your settings:
+   
+   **For PostgreSQL:**
    ```env
    DB_HOST=localhost
    DB_PORT=5432
@@ -65,17 +74,37 @@
    DEFAULT_USER_EMAIL=dev@localhost
    DEFAULT_USER_ROLE=admin
    ```
+   
+   **For Supabase:**
+   ```env
+   SUPABASE_URL=https://your-project.supabase.co
+   SUPABASE_SERVICE_KEY=your_service_key_jwt
+   
+   # Development settings
+   LOGGING_LEVEL=DEBUG
+   AUTH_MODE=local
+   DEFAULT_USER_EMAIL=dev@localhost
+   DEFAULT_USER_ROLE=admin
+   ```
 
 5. **Initialize Database**
    ```bash
+   # Auto-detect backend from .env
    python setup.py
+   
+   # Or force specific backend
+   python setup.py --backend postgresql
+   python setup.py --backend supabase
    ```
    
+   **Note for Supabase**: After running setup, you'll need to manually execute the consolidated SQL file in your Supabase Dashboard.
+   
    This will:
-   - Create database if not exists
-   - Run schema.sql to create tables
-   - Load database functions from functions_comprehensive.sql
-   - Create default admin user
+   - Create database if not exists (PostgreSQL only)
+   - Apply all database migrations automatically
+   - Create migration tracking table
+   - Set up tables, functions, and indexes
+   - Create default admin user (PostgreSQL only)
 
 6. **Verify Installation**
    ```bash
@@ -92,6 +121,56 @@
    ✅ Query final results
    Overall Success: ✅ PASS
    ```
+
+## Database Migration System
+
+PharmChecker uses a unified migration system that works with both PostgreSQL and Supabase. All database schema changes go through versioned migration files.
+
+### Migration Directory Structure
+```
+migrations/
+├── migrate.py                        # Migration runner
+├── migrations/                       # Individual migration files
+├── supabase_setup_consolidated.sql   # Complete Supabase setup
+└── MIGRATION_GUIDE.md               # Detailed migration guide
+```
+
+### Common Migration Commands
+```bash
+# Check migration status
+python migrations/migrate.py --status --target local
+
+# Apply migrations to PostgreSQL
+python migrations/migrate.py --target local
+
+# For Supabase: Use consolidated SQL file in Dashboard
+cat migrations/supabase_setup_consolidated.sql
+```
+
+### Creating New Migrations
+When you need to modify the database schema:
+
+1. **Create new migration file** with timestamp:
+   ```bash
+   touch migrations/migrations/$(date +"%Y%m%d%H%M%S")_your_change.sql
+   ```
+
+2. **Write migration SQL** using safe patterns:
+   ```sql
+   CREATE TABLE IF NOT EXISTS new_table (
+     id SERIAL PRIMARY KEY,
+     name TEXT NOT NULL
+   );
+   ```
+
+3. **Test migration locally**:
+   ```bash
+   python migrations/migrate.py --target local
+   ```
+
+4. **Update consolidated file** for Supabase users
+
+**Important**: Never edit `schema.sql` or `functions_comprehensive.sql` directly. Use the migration system.
 
 ## Development Workflow
 

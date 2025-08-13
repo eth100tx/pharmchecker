@@ -1,0 +1,29 @@
+[api]
+enabled = true
+port = 54321
+
+[db]
+port = 54322
+
+[studio]
+enabled = true
+port = 54323
+
+[project_id]
+value = "ddjsohylqgtukhsmsezc"
+
+[auth]
+enabled = true
+port = 54324
+
+[storage]
+enabled = true
+port = 54325
+
+[functions]
+enabled = true
+port = 54326
+
+[realtime]
+enabled = true
+port = 54327
