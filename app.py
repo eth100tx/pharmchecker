@@ -14,23 +14,26 @@ import logging
 
 # Add project root to path
 sys.path.append(os.path.dirname(os.path.abspath(__file__)))
+# Add API POC client to path
+sys.path.append(os.path.join(os.path.dirname(os.path.abspath(__file__)), 'api_poc', 'gui'))
 
 # Configure logger
 logger = logging.getLogger(__name__)
 
-# Import utility modules
-from utils.database import get_database_manager, query_with_cache
+# Import API client (NEW - replaces direct database access)
+from client import create_client
+
+# Import existing utility modules (keeping display utilities)
 from utils.display import (
     display_dataset_summary, display_results_table,
     create_export_button, format_status_badge,
     display_dense_results_table, display_row_detail_section
 )
-from utils.validation_local import (
-    load_dataset_combination, is_data_loaded, get_loaded_tags,
-    get_comprehensive_results, clear_loaded_data
-)
 from utils.auth import get_auth_manager, get_user_context, require_auth
 from utils.session import auto_restore_dataset_selection, save_dataset_selection
+
+# Import comprehensive results validation from API POC
+from components.comprehensive_results import validate_comprehensive_results
 
 # Page configuration
 st.set_page_config(
@@ -39,6 +42,23 @@ st.set_page_config(
     layout="wide",
     initial_sidebar_state="expanded"
 )
+
+# Initialize API client
+@st.cache_resource
+def get_api_client():
+    """Get cached API client instance"""
+    return create_client(prefer_supabase=True)
+
+def get_client():
+    """Get API client with fallback initialization"""
+    if 'api_client' not in st.session_state:
+        st.session_state.api_client = get_api_client()
+    
+    # Ensure client has new scoring methods (for development)
+    if not hasattr(st.session_state.api_client, 'has_scores'):
+        st.session_state.api_client = get_api_client()
+    
+    return st.session_state.api_client
 
 def get_detailed_validation_warning(pharmacy_name: str, search_state: str, license_number: str, 
                                    comprehensive_results: pd.DataFrame) -> Dict:
@@ -133,7 +153,7 @@ def initialize_session_state():
         if restored_datasets and all(restored_datasets.get(k) for k in ['pharmacies', 'states']):
             st.session_state.current_page = 'Results Matrix'
             # Auto-load the restored data
-            from utils.validation_local import load_dataset_combination
+            # load_dataset_combination now defined locally
             validated_tag = restored_datasets.get('validated')
             load_dataset_combination(
                 restored_datasets['pharmacies'], 
@@ -162,13 +182,189 @@ def initialize_session_state():
 # Database operations using utility functions
 def get_available_datasets() -> Dict[str, List[str]]:
     """Get all available dataset tags by kind"""
-    db = get_database_manager()
-    return db.get_datasets()
+    client = get_client()
+    datasets = client.get_datasets()
+    
+    # Group by kind
+    result = {'pharmacies': [], 'states': [], 'validated': []}
+    for dataset in datasets:
+        kind = dataset.get('kind')
+        tag = dataset.get('tag')
+        if kind in result and tag:
+            result[kind].append(tag)
+    
+    return result
 
 def get_dataset_stats(kind: str, tag: str) -> Dict:
     """Get statistics for a specific dataset"""
-    db = get_database_manager()
-    return db.get_dataset_stats(kind, tag)
+    client = get_client()
+    datasets = client.get_datasets()
+    
+    # Find the specific dataset
+    dataset_info = None
+    for dataset in datasets:
+        if dataset.get('kind') == kind and dataset.get('tag') == tag:
+            dataset_info = dataset
+            break
+    
+    if not dataset_info:
+        return {'record_count': 0}
+    
+    # Get record count by querying the appropriate table
+    try:
+        dataset_id = dataset_info.get('id')
+        if kind == 'pharmacies':
+            records = client.get_pharmacies(dataset_id=dataset_id, limit=9999)
+            record_count = len(records) if isinstance(records, list) else 0
+        elif kind == 'states':
+            records = client.get_search_results(dataset_id=dataset_id, limit=9999)  
+            record_count = len(records) if isinstance(records, list) else 0
+        elif kind == 'validated':
+            # Get validated overrides count
+            validated_data = client.get_table_data('validated_overrides', filters={'dataset_id': f'eq.{dataset_id}'}, limit=9999)
+            record_count = len(validated_data) if isinstance(validated_data, list) else 0
+        else:
+            record_count = 0
+    except Exception as e:
+        record_count = 0
+    
+    return {
+        'id': dataset_info.get('id'),
+        'tag': tag,
+        'kind': kind,
+        'description': dataset_info.get('description', ''),
+        'created_at': dataset_info.get('created_at'),
+        'created_by': dataset_info.get('created_by', 'Unknown'),
+        'record_count': record_count
+    }
+
+# NEW: API-based data loading functions (replacing validation_local)
+def load_dataset_combination(pharmacy_tag: str, states_tag: str, validated_tag: str = None) -> bool:
+    """Load dataset combination using API client with transparent scoring"""
+    try:
+        client = get_client()
+        
+        # Check if scores exist for this combination
+        has_scores = client.has_scores(states_tag, pharmacy_tag)
+        
+        if not has_scores:
+            # Trigger scoring automatically
+            with st.spinner("Computing address match scores..."):
+                result = client.trigger_scoring(states_tag, pharmacy_tag)
+                if 'error' in result:
+                    st.error(f"Scoring failed: {result['error']}")
+                    return False
+                else:
+                    st.success(f"✅ Computed {result.get('scores_computed', 0)} scores")
+        
+        # Get comprehensive results
+        results = client.get_comprehensive_results(states_tag, pharmacy_tag, validated_tag or "")
+        
+        if isinstance(results, dict) and 'error' in results:
+            st.error(f"Failed to load data: {results['error']}")
+            return False
+        
+        # Store in session state (compatible with existing code)
+        st.session_state.comprehensive_results = pd.DataFrame(results)
+        st.session_state.loaded_tags = {
+            'pharmacies': pharmacy_tag,
+            'states': states_tag, 
+            'validated': validated_tag
+        }
+        
+        # Run validation checks
+        validation_warnings = validate_comprehensive_results(results, states_tag, pharmacy_tag)
+        if validation_warnings:
+            st.warning("⚠️ **Data Quality Issues Detected:**")
+            for warning in validation_warnings:
+                st.warning(f"• {warning}")
+        
+        return True
+        
+    except Exception as e:
+        st.error(f"Error loading dataset combination: {e}")
+        return False
+
+def get_comprehensive_results() -> pd.DataFrame:
+    """Get comprehensive results from session state"""
+    return st.session_state.get('comprehensive_results', pd.DataFrame())
+
+def is_data_loaded() -> bool:
+    """Check if data is loaded in session state"""
+    return 'comprehensive_results' in st.session_state and not st.session_state.comprehensive_results.empty
+
+def get_loaded_tags() -> Dict[str, str]:
+    """Get currently loaded dataset tags"""
+    return st.session_state.get('loaded_tags', {})
+
+def clear_loaded_data():
+    """Clear loaded data from session state"""
+    if 'comprehensive_results' in st.session_state:
+        del st.session_state.comprehensive_results
+    if 'loaded_tags' in st.session_state:
+        del st.session_state.loaded_tags
+
+# Legacy compatibility wrapper (temporary)
+def get_database_manager():
+    """Temporary wrapper for legacy code - returns a mock object"""
+    class MockDB:
+        def get_backend_info(self):
+            client = get_client()
+            backend_name = client.get_active_backend()
+            if 'Supabase' in backend_name:
+                return {
+                    'type': 'supabase',
+                    'backend': backend_name,
+                    'url': client.get_active_api_url()
+                }
+            else:
+                return {
+                    'type': 'postgresql', 
+                    'backend': backend_name,
+                    'url': client.get_active_api_url()
+                }
+        
+        def get_dataset_stats(self, kind: str, tag: str) -> Dict:
+            # Delegate to the updated function
+            return get_dataset_stats(kind, tag)
+        
+        def get_loaded_states(self, states_tag: str) -> List[str]:
+            # Get unique states that actually have search results data
+            if 'comprehensive_results' in st.session_state and not st.session_state.comprehensive_results.empty:
+                df = st.session_state.comprehensive_results
+                if 'search_state' in df.columns and 'result_id' in df.columns:
+                    # Only return states that have actual search result data
+                    states_with_data = df[df['result_id'].notna()]['search_state'].dropna().unique()
+                    return sorted(states_with_data.tolist())
+            return []
+        
+        def filter_for_detail(self, df, pharmacy_name: str, search_state: str):
+            # Filter comprehensive results for a specific pharmacy-state combination
+            return df[
+                (df['pharmacy_name'] == pharmacy_name) & 
+                (df['search_state'] == search_state)
+            ].copy()
+        
+        def aggregate_for_matrix(self, df):
+            # Client-side aggregation with proper record counting
+            if df.empty:
+                return df
+            
+            # Group by pharmacy-state combination
+            grouped = df.groupby(['pharmacy_name', 'search_state'])
+            
+            # Get the first record for most fields, but count actual records
+            result = grouped.first().reset_index()
+            
+            # Add proper record count - count non-null result_ids
+            result['record_count'] = grouped['result_id'].apply(lambda x: x.notna().sum()).values
+            
+            # For combinations with no search results, set count to 1 (the pharmacy record itself)
+            result['record_count'] = result['record_count'].apply(lambda x: max(1, x))
+            
+            return result
+    
+    return MockDB()
 
 # UI Components
 def render_sidebar():
@@ -278,6 +474,51 @@ def render_sidebar():
         else:
             st.sidebar.warning("⚠️ No persistence (not authenticated)")
     
+    # Database Connection Info
+    st.sidebar.markdown("---")
+    st.sidebar.subheader("Database Connection")
+    
+    try:
+        # Get backend information from database manager
+        if hasattr(db, 'get_backend_info'):
+            backend_info = db.get_backend_info()
+            backend_type = backend_info.get('type', 'unknown')
+            
+            if backend_type == 'api':
+                # API mode
+                active_backend = backend_info.get('active_backend', 'Unknown')
+                api_url = backend_info.get('api_url', 'Unknown')
+                
+                if 'supabase' in active_backend.lower():
+                    st.sidebar.success(f"🌐 **{active_backend}**")
+                    st.sidebar.caption(f"Cloud API: {api_url.split('//')[1].split('.')[0] if '//' in api_url else api_url}")
+                else:
+                    st.sidebar.success(f"🔗 **{active_backend}**")
+                    st.sidebar.caption(f"Local API: {api_url}")
+                
+                # Show fallback status
+                if backend_info.get('fallback_available'):
+                    st.sidebar.caption("✅ Fallback: Direct DB available")
+                else:
+                    st.sidebar.caption("⚠️ Fallback: None")
+                    
+            else:
+                # Direct database mode
+                from config import get_db_config
+                db_config = get_db_config()
+                st.sidebar.success("🔗 **Direct Database**")
+                st.sidebar.caption(f"PostgreSQL: {db_config['host']}:{db_config['port']}")
+                st.sidebar.caption(f"Database: {db_config['database']}")
+        else:
+            # Legacy database manager without backend info
+            from config import get_db_config
+            db_config = get_db_config()
+            st.sidebar.info("🔗 **Direct Database** (Legacy)")
+            st.sidebar.caption(f"PostgreSQL: {db_config['host']}:{db_config['port']}")
+            
+    except Exception as e:
+        st.sidebar.error("❌ **Connection Error**")
+        st.sidebar.caption(f"Error: {str(e)[:50]}")
         
     # No dark mode toggle needed - keeping default Streamlit theme
     
@@ -438,6 +679,51 @@ def render_dataset_manager():
             else:
                 st.error("Please select both Pharmacies and States datasets")
     
+    # Debug mode scoring controls
+    if st.session_state.get('debug_mode', False) and selected_pharmacy != 'None' and selected_states != 'None':
+        st.markdown("---")
+        st.markdown("**🔧 Debug: Scoring Controls**")
+        
+        col1, col2, col3 = st.columns(3)
+        
+        with col1:
+            if st.button("📊 Check Scores", help="Check if scores exist for this dataset combination"):
+                try:
+                    client = get_client()
+                    has_scores = client.has_scores(selected_states, selected_pharmacy)
+                    if has_scores:
+                        st.success(f"✅ Scores exist for {selected_pharmacy} + {selected_states}")
+                    else:
+                        st.warning(f"⚠️ No scores found for {selected_pharmacy} + {selected_states}")
+                except Exception as e:
+                    st.error(f"Error checking scores: {e}")
+        
+        with col2:
+            if st.button("🔄 Compute Scores", help="Force compute scores for this dataset combination"):
+                try:
+                    client = get_client()
+                    with st.spinner("Computing scores..."):
+                        result = client.trigger_scoring(selected_states, selected_pharmacy)
+                        if 'error' in result:
+                            st.error(f"Scoring failed: {result['error']}")
+                        else:
+                            st.success(f"✅ Computed {result.get('scores_computed', 0)} scores")
+                except Exception as e:
+                    st.error(f"Error computing scores: {e}")
+        
+        with col3:
+            if st.button("🗑️ Clear Scores", help="Clear existing scores (for testing new plugin versions)"):
+                try:
+                    client = get_client()
+                    with st.spinner("Clearing scores..."):
+                        result = client.clear_scores(selected_states, selected_pharmacy)
+                        if 'error' in result:
+                            st.error(f"Clear failed: {result['error']}")
+                        else:
+                            st.success("✅ Scores cleared successfully")
+                except Exception as e:
+                    st.error(f"Error clearing scores: {e}")
+    
 
 def render_results_matrix():
     """Main results matrix view using loaded data"""
@@ -460,7 +746,7 @@ def render_results_matrix():
         comprehensive_results is not None and 
         len(comprehensive_results[comprehensive_results['override_type'].notna()]) == 0):
         
-        from utils.validation_local import load_dataset_combination
+        # load_dataset_combination now defined locally above
         success = load_dataset_combination(
             loaded_tags['pharmacies'],
             loaded_tags['states'], 
@@ -558,7 +844,7 @@ def render_results_matrix():
     full_results_df = comprehensive_results.copy()
     
     # Always filter to states that have actual search data
-    states_with_data = full_results_df[full_results_df['latest_result_id'].notna()]['search_state'].unique()
+    states_with_data = full_results_df[full_results_df['result_id'].notna()]['search_state'].unique()
     full_results_df = full_results_df[full_results_df['search_state'].isin(states_with_data)]
     
     if full_results_df.empty:
@@ -585,7 +871,23 @@ def render_results_matrix():
         return
     
     # Update status buckets using simple validation check
-    from utils.validation_local import calculate_status_simple
+    # Simple status calculation (replacing calculate_status_simple)
+    def calculate_status_simple(row):
+        if pd.isna(row.get('result_id')):
+            return 'no data'
+        elif pd.notna(row.get('override_type')):
+            return 'validated'  
+        elif pd.notna(row.get('score_overall')):
+            score = float(row['score_overall'])
+            if score >= 85:
+                return 'match'
+            elif score >= 60:
+                return 'weak match'  # Fixed: use space not underscore
+            else:
+                return 'no match'
+        else:
+            return 'no data'  # Fixed: use consistent naming
+    
     results_df['status_bucket'] = results_df.apply(calculate_status_simple, axis=1)
     
     # Log status results for validation records
@@ -651,8 +953,8 @@ def render_results_matrix():
     validated_present = len(filtered_data[filtered_data['status_bucket'] == 'validated present'])
     validated_empty = len(filtered_data[filtered_data['status_bucket'] == 'validated empty'])
     total_validated = validated_present + validated_empty
-    not_found = len(filtered_data[(filtered_data['status_bucket'] == 'no data') & filtered_data['latest_result_id'].notna()])
-    no_data = len(filtered_data[(filtered_data['status_bucket'] == 'no data') & filtered_data['latest_result_id'].isna()])
+    not_found = len(filtered_data[(filtered_data['status_bucket'] == 'no data') & filtered_data['result_id'].notna()])
+    no_data = len(filtered_data[(filtered_data['status_bucket'] == 'no data') & filtered_data['result_id'].isna()])
     
     with st.expander(f"📊 Summary: {total_checked} total | {matches_validated} matches | {weak_matches} weak | {no_matches_validated} no match | {total_validated} validated | {not_found} not found | {no_data} no data", expanded=False):
         col1, col2, col3, col4, col5, col6, col7 = st.columns(7)

@@ -333,6 +333,251 @@ class UnifiedClient:
             return self.supabase_client.get_table_counts_supabase(tables)
         else:
             return self.postgrest_client.get_table_counts(tables)
+    
+    def _get_dataset_id(self, tag: str, kind: str) -> Optional[int]:
+        """Get dataset ID for a tag and kind"""
+        datasets = self.get_datasets()
+        for dataset in datasets:
+            if dataset.get('tag') == tag and dataset.get('kind') == kind:
+                return dataset.get('id')
+        return None
+    
+    def has_scores(self, states_tag: str, pharmacies_tag: str) -> bool:
+        """Check if scores exist for dataset pair"""
+        # Get dataset IDs
+        states_id = self._get_dataset_id(states_tag, 'states')
+        pharmacies_id = self._get_dataset_id(pharmacies_tag, 'pharmacies')
+        
+        if not states_id or not pharmacies_id:
+            return False
+        
+        # Count existing scores via active backend
+        if self.use_supabase:
+            # Use Supabase REST API - just check if any records exist
+            filters = {
+                'states_dataset_id': f'eq.{states_id}',
+                'pharmacies_dataset_id': f'eq.{pharmacies_id}'
+            }
+            result = self.supabase_client.get_table_data_via_rest(
+                'match_scores', limit=1, filters=filters
+            )
+            # If we get any results, scores exist
+            return len(result) > 0 if isinstance(result, list) else False
+        else:
+            # Use PostgREST count
+            try:
+                response = self.postgrest_client._request(
+                    'GET', 'match_scores',
+                    params={
+                        'select': 'count',
+                        'states_dataset_id': f'eq.{states_id}',
+                        'pharmacies_dataset_id': f'eq.{pharmacies_id}'
+                    },
+                    headers={'Prefer': 'count=exact'}
+                )
+                count = response.json()[0]['count']
+                return count > 0
+            except Exception:
+                return False
+    
+    def trigger_scoring(self, states_tag: str, pharmacies_tag: str, batch_size: int = 200) -> Dict[str, Any]:
+        """Trigger client-side scoring computation for dataset pair"""
+        try:
+            # Step 1: Get all results (including those without scores)
+            results = self.get_comprehensive_results(states_tag, pharmacies_tag, "")
+            if isinstance(results, dict) and 'error' in results:
+                return results
+            
+            # Step 2: Find pharmacy/result pairs that need scoring
+            missing_pairs = []
+            for result in results:
+                if result.get('result_id') and result.get('score_overall') is None:
+                    missing_pairs.append({
+                        'pharmacy_id': result['pharmacy_id'],
+                        'result_id': result['result_id'],
+                        'pharmacy_address': result.get('pharmacy_address', ''),
+                        'pharmacy_city': result.get('pharmacy_city', ''),
+                        'pharmacy_state': result.get('pharmacy_state', ''),
+                        'pharmacy_zip': result.get('pharmacy_zip', ''),
+                        'result_address': result.get('result_address', ''),
+                        'result_city': result.get('result_city', ''),
+                        'result_state': result.get('result_state', ''),
+                        'result_zip': result.get('result_zip', '')
+                    })
+            
+            if not missing_pairs:
+                return {'success': True, 'message': 'No scoring needed - all pairs already scored', 'scores_computed': 0}
+            
+            # Step 3: Compute scores client-side using scoring_plugin.py
+            computed_scores = self._compute_scores_client_side(missing_pairs, states_tag, pharmacies_tag)
+            
+            # Step 4: Insert scores via API
+            if computed_scores:
+                insert_result = self._insert_scores(computed_scores)
+                if 'error' in insert_result:
+                    return insert_result
+            
+            return {
+                'success': True, 
+                'message': f'Computed {len(computed_scores)} scores client-side',
+                'scores_computed': len(computed_scores)
+            }
+            
+        except Exception as e:
+            return {'error': str(e)}
+    
+    def _compute_scores_client_side(self, missing_pairs: List[Dict], states_tag: str, pharmacies_tag: str) -> List[Dict]:
+        """Compute scores client-side using scoring_plugin.py"""
+        # Import scoring plugin
+        import sys
+        from pathlib import Path
+        
+        # Add project root to path to import scoring_plugin
+        project_root = Path(__file__).parent.parent.parent
+        if str(project_root) not in sys.path:
+            sys.path.insert(0, str(project_root))
+        
+        try:
+            from scoring_plugin import Address, match_addresses
+        except ImportError as e:
+            return []  # Return empty if can't import plugin
+        
+        # Get dataset IDs for the scores
+        states_id = self._get_dataset_id(states_tag, 'states')
+        pharmacies_id = self._get_dataset_id(pharmacies_tag, 'pharmacies')
+        
+        computed_scores = []
+        
+        for pair in missing_pairs:
+            try:
+                # Create address objects
+                pharmacy_addr = Address(
+                    address=pair['pharmacy_address'],
+                    suite=None,  # Suite not typically in pharmacy data
+                    city=pair['pharmacy_city'],
+                    state=pair['pharmacy_state'],
+                    zip=pair['pharmacy_zip']
+                )
+                
+                result_addr = Address(
+                    address=pair['result_address'],
+                    suite=None,  # Suite not typically in search results
+                    city=pair['result_city'],
+                    state=pair['result_state'],
+                    zip=pair['result_zip']
+                )
+                
+                # Compute scores using plugin
+                street_score, csz_score, overall_score = match_addresses(result_addr, pharmacy_addr)
+                
+                # Prepare score record
+                computed_scores.append({
+                    'states_dataset_id': states_id,
+                    'pharmacies_dataset_id': pharmacies_id,
+                    'pharmacy_id': pair['pharmacy_id'],
+                    'result_id': pair['result_id'],
+                    'score_overall': round(overall_score, 2),
+                    'score_street': round(street_score, 2),
+                    'score_city_state_zip': round(csz_score, 2),
+                    'scoring_meta': {
+                        'algorithm': 'v1.0',
+                        'computed_client_side': True,
+                        'states_tag': states_tag,
+                        'pharmacies_tag': pharmacies_tag
+                    }
+                })
+                
+            except Exception as e:
+                # Skip this pair if scoring fails
+                continue
+        
+        return computed_scores
+    
+    def _insert_scores(self, scores: List[Dict]) -> Dict[str, Any]:
+        """Insert computed scores via API"""
+        if not scores:
+            return {'success': True, 'inserted': 0}
+        
+        try:
+            if self.use_supabase:
+                # Use Supabase REST API to insert
+                import requests
+                url = f"{self.supabase_client.url}/rest/v1/match_scores"
+                
+                # Convert scoring_meta to JSON string for database
+                for score in scores:
+                    if isinstance(score.get('scoring_meta'), dict):
+                        import json
+                        score['scoring_meta'] = json.dumps(score['scoring_meta'])
+                
+                response = requests.post(url, 
+                                       headers=self.supabase_client.headers,
+                                       json=scores,
+                                       timeout=30)
+                
+                if response.status_code in [200, 201]:
+                    return {'success': True, 'inserted': len(scores)}
+                else:
+                    return {'error': f'Insert failed: {response.status_code} {response.text}'}
+            else:
+                # Use PostgREST to insert
+                import json
+                
+                # Convert scoring_meta to JSON string for database
+                for score in scores:
+                    if isinstance(score.get('scoring_meta'), dict):
+                        score['scoring_meta'] = json.dumps(score['scoring_meta'])
+                
+                response = self.postgrest_client._request(
+                    'POST', 'match_scores',
+                    data=scores
+                )
+                return {'success': True, 'inserted': len(scores)}
+                
+        except Exception as e:
+            return {'error': str(e)}
+    
+    def clear_scores(self, states_tag: str, pharmacies_tag: str) -> Dict[str, Any]:
+        """Clear scores for dataset pair (for testing)"""
+        # Get dataset IDs
+        states_id = self._get_dataset_id(states_tag, 'states')
+        pharmacies_id = self._get_dataset_id(pharmacies_tag, 'pharmacies')
+        
+        if not states_id or not pharmacies_id:
+            return {'error': 'Dataset IDs not found'}
+        
+        if self.use_supabase:
+            # Use Supabase REST API delete
+            try:
+                import requests
+                url = f"{self.supabase_client.url}/rest/v1/match_scores"
+                params = {
+                    'states_dataset_id': f'eq.{states_id}',
+                    'pharmacies_dataset_id': f'eq.{pharmacies_id}'
+                }
+                response = requests.delete(url, 
+                                         headers=self.supabase_client.headers, 
+                                         params=params, 
+                                         timeout=30)
+                if response.status_code in [200, 204]:
+                    return {'success': True, 'message': 'Scores cleared'}
+                else:
+                    return {'error': f'Delete failed: {response.status_code} {response.text}'}
+            except Exception as e:
+                return {'error': str(e)}
+        else:
+            # Use PostgREST delete
+            try:
+                response = self.postgrest_client._request(
+                    'DELETE', 'match_scores',
+                    params={
+                        'states_dataset_id': f'eq.{states_id}',
+                        'pharmacies_dataset_id': f'eq.{pharmacies_id}'
+                    }
+                )
+                return {'success': True, 'message': 'Scores cleared'}
+            except Exception as e:
+                return {'error': str(e)}
 
 
 def create_client(prefer_supabase: bool = False) -> UnifiedClient:

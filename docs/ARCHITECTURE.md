@@ -12,8 +12,8 @@ PharmChecker is a three-tier application for pharmacy license verification:
                                                            │
                                                            ▼
 ┌─────────────────┐     ┌──────────────────┐     ┌─────────────────┐
-│   Web UI        │◀────│  Scoring Engine  │◀────│   Database      │
-│  (Streamlit)    │     │  (Lazy Compute)  │     │   Functions     │
+│   Web UI        │◀────│ Client-Side      │◀────│   REST API      │
+│  (Streamlit)    │     │ Scoring Engine   │     │ (PostgREST)     │
 └─────────────────┘     └──────────────────┘     └─────────────────┘
 ```
 
@@ -21,9 +21,10 @@ PharmChecker is a three-tier application for pharmacy license verification:
 
 1. **Dataset Independence**: Any combination of pharmacy, state search, and validation datasets can be loaded together
 2. **Natural Key Linking**: Uses pharmacy names and license numbers for relationships (no hardcoded IDs)
-3. **Lazy Computation**: Address scores calculated on-demand when first needed
-4. **Comprehensive Results**: Single database query returns all data for client-side processing
-5. **Versioned Datasets**: Multiple versions of data can coexist with tags (e.g., "jan_2024", "feb_2024")
+3. **Transparent Client-Side Scoring**: Address scores calculated transparently via client-side `scoring_plugin.py`
+4. **API-First Architecture**: All operations via REST endpoints, no complex database functions
+5. **Comprehensive Results**: Single database query returns all data for client-side processing
+6. **Versioned Datasets**: Multiple versions of data can coexist with tags (e.g., "jan_2024", "feb_2024")
 
 ## Database Schema
 
@@ -104,8 +105,46 @@ class BaseImporter:
 
 - **PharmacyImporter**: CSV → pharmacies table
 - **StateImporter**: JSON directory → search_results table  
-- **ScoringEngine**: Compute scores → match_scores table
+- **Client-Side Scoring**: Transparent computation via `scoring_plugin.py` → match_scores table
 - **ValidatedImporter**: CSV → validated_overrides table
+
+## API-First Scoring Architecture
+
+### Client-Side Transparent Scoring
+
+**Design Goal**: Cloud-compatible scoring without complex database functions
+
+**Key Principles**:
+- ✅ **No database-side Python execution** - pure PostgreSQL compatibility
+- ✅ **Client-side plugin execution** - `scoring_plugin.py` runs in GUI 
+- ✅ **REST API operations only** - standard table endpoints
+- ✅ **Transparent to users** - scoring happens automatically when needed
+- ✅ **One-time computation** - results cached permanently per dataset pair
+
+### Scoring Workflow
+
+```
+1. User requests comprehensive results
+2. Client: GET /match_scores?states_dataset_id=eq.X&pharmacies_dataset_id=eq.Y (check count)
+3. If count = 0:
+   a. Client: GET /rpc/get_all_results_with_context (get pairs needing scores)
+   b. Client: Run scoring_plugin.py locally on missing pairs  
+   c. Client: POST /match_scores (insert computed scores)
+4. Client: GET /rpc/get_all_results_with_context (return complete results)
+```
+
+### API Endpoints Used
+
+**Required Database Functions**:
+- `get_all_results_with_context()` - Single comprehensive results query
+
+**Standard Table Operations**:
+- `GET /match_scores` - Check existence, retrieve scores
+- `POST /match_scores` - Insert computed scores  
+- `DELETE /match_scores` - Clear scores for testing
+- `GET /datasets` - Get dataset metadata
+
+**No Complex RPC Functions Needed** - keeps database cloud-compatible
 
 ## Scoring Algorithm
 
@@ -170,9 +209,9 @@ app.py (main)
 
 2. **Scoring Phase**
    - User selects dataset combination
-   - System identifies missing scores
-   - Lazy computation on first access
-   - Permanent cache in database
+   - Client checks score existence via REST API
+   - **Transparent client-side computation** using `scoring_plugin.py`
+   - Results inserted via REST API, cached permanently in database
 
 3. **Review Phase**
    - Comprehensive results loaded once

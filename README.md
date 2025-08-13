@@ -182,10 +182,13 @@ pharmchecker/
 
 ## Key Features
 
-### 🔄 Lazy Scoring System
-- Address matching computed automatically when dataset combinations are first accessed
-- Intelligent fuzzy matching algorithm with street/city/state/ZIP components
-- Results cached permanently for performance
+### 🔄 Transparent Client-Side Scoring System
+- Address matching computed **transparently** when dataset combinations are first accessed
+- **Client-side execution** of `scoring_plugin.py` for cloud compatibility
+- **API-first architecture** - all scoring via REST endpoints, no database functions
+- Intelligent fuzzy matching algorithm with street/city/state/ZIP components (70% street, 30% location)
+- Results cached permanently in database for performance
+- **One-time computation** per dataset pair - never recomputed unless explicitly cleared
 
 ### 📊 Dataset Versioning  
 - Import multiple versions of pharmacy, state, and validation data
@@ -271,6 +274,7 @@ python test_gui.py       # Test web interface components
 - **Database**: PostgreSQL 13+ with pg_trgm extension OR Supabase (cloud PostgreSQL)
 - **Backend**: Python 3.8+, psycopg2, SQLAlchemy  
 - **API Layer**: PostgREST (local) OR Supabase REST API (cloud)
+- **Scoring Engine**: Client-side `scoring_plugin.py` with RapidFuzz address matching
 - **Web Framework**: Streamlit 1.28+ with Plotly charts
 - **Data Processing**: pandas, RapidFuzz (address matching)
 - **Import System**: REST API-based importers for dual backend support

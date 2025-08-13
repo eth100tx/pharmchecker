@@ -63,22 +63,72 @@ def render_comprehensive_results(client):
         with col2:
             cache_results = st.checkbox("Cache Results", value=True, help="Cache results in session state")
         
-        # Quick compatibility test
-        if st.button("🔍 Test Compatibility", help="Test if the selected dataset combination works"):
-            if pharmacies_tag and states_tag:
-                with st.spinner("Testing compatibility..."):
-                    try:
-                        test_result = client.get_comprehensive_results(states_tag, pharmacies_tag, validated_tag)
-                        if isinstance(test_result, dict) and 'error' in test_result:
-                            st.error(f"❌ Incompatible: {test_result['error']}")
-                        else:
-                            st.success(f"✅ Compatible! Would return {len(test_result)} results")
-                    except Exception as e:
-                        st.error(f"❌ Test failed: {e}")
-            else:
-                st.warning("Please select both pharmacy and states datasets first")
+        # Scoring status and controls
+        if pharmacies_tag and states_tag:
+            st.subheader("Scoring Status")
+            
+            # Check if scores exist
+            has_scores = False
+            try:
+                has_scores = client.has_scores(states_tag, pharmacies_tag)
+                if has_scores:
+                    st.success(f"✅ Scores exist for {pharmacies_tag} + {states_tag}")
+                else:
+                    st.warning(f"⚠️ No scores found for {pharmacies_tag} + {states_tag}")
+            except Exception as e:
+                st.error(f"Error checking scores: {e}")
+            
+            # Scoring controls
+            col1, col2, col3 = st.columns(3)
+            
+            with col1:
+                if st.button("🔄 Compute Scores", help="Compute/recompute scores for this dataset pair"):
+                    with st.spinner("Computing scores..."):
+                        try:
+                            result = client.trigger_scoring(states_tag, pharmacies_tag, batch_size=200)
+                            if 'error' in result:
+                                st.error(f"Scoring failed: {result['error']}")
+                            else:
+                                st.success("Scoring completed successfully!")
+                                st.json(result)
+                                # Clear cache so next query gets fresh results
+                                cache_key = f"results_{states_tag}_{pharmacies_tag}_{validated_tag}"
+                                if cache_key in st.session_state:
+                                    del st.session_state[cache_key]
+                        except Exception as e:
+                            st.error(f"Error triggering scoring: {e}")
+            
+            with col2:
+                if st.button("🗑️ Clear Scores", help="Clear existing scores (for testing)"):
+                    with st.spinner("Clearing scores..."):
+                        try:
+                            result = client.clear_scores(states_tag, pharmacies_tag)
+                            if 'error' in result:
+                                st.error(f"Clear failed: {result['error']}")
+                            else:
+                                st.success("Scores cleared successfully!")
+                                # Clear cache
+                                cache_key = f"results_{states_tag}_{pharmacies_tag}_{validated_tag}"
+                                if cache_key in st.session_state:
+                                    del st.session_state[cache_key]
+                        except Exception as e:
+                            st.error(f"Error clearing scores: {e}")
+            
+            with col3:
+                if st.button("🔍 Test Compatibility", help="Test if the selected dataset combination works"):
+                    with st.spinner("Testing compatibility..."):
+                        try:
+                            test_result = client.get_comprehensive_results(states_tag, pharmacies_tag, validated_tag)
+                            if isinstance(test_result, dict) and 'error' in test_result:
+                                st.error(f"❌ Incompatible: {test_result['error']}")
+                            else:
+                                st.success(f"✅ Compatible! Would return {len(test_result)} results")
+                        except Exception as e:
+                            st.error(f"❌ Test failed: {e}")
+        else:
+            st.info("Select both pharmacy and states datasets to see scoring controls")
         
-        # Execute query
+        # Execute query with automatic scoring
         if st.button("Get Comprehensive Results", type="primary", disabled=not (pharmacies_tag and states_tag)):
             # Use cache if enabled
             cache_key = f"results_{states_tag}_{pharmacies_tag}_{validated_tag}"
@@ -87,6 +137,33 @@ def render_comprehensive_results(client):
                 st.info("Using cached results")
                 results = st.session_state[cache_key]
             else:
+                with st.spinner("Checking scores..."):
+                    # Check if scores exist first
+                    needs_scoring = False
+                    try:
+                        needs_scoring = not client.has_scores(states_tag, pharmacies_tag)
+                        if needs_scoring:
+                            st.info("No scores found - will compute automatically")
+                        else:
+                            st.info("Scores exist - proceeding with results")
+                    except Exception as e:
+                        st.warning(f"Could not check scores: {e}")
+                
+                # Trigger scoring if needed
+                if needs_scoring:
+                    with st.spinner("Computing scores automatically..."):
+                        try:
+                            result = client.trigger_scoring(states_tag, pharmacies_tag, batch_size=200)
+                            if 'error' in result:
+                                st.error(f"Automatic scoring failed: {result['error']}")
+                                st.stop()
+                            else:
+                                st.success("Scores computed automatically!")
+                        except Exception as e:
+                            st.error(f"Error computing scores: {e}")
+                            st.stop()
+                
+                # Now fetch results
                 with st.spinner("Fetching comprehensive results..."):
                     try:
                         results = client.get_comprehensive_results(states_tag, pharmacies_tag, validated_tag)
@@ -134,6 +211,14 @@ def render_comprehensive_results(client):
             if limit_results and len(results) > max_results:
                 results = results[:max_results]
                 st.warning(f"Results limited to {max_results} records")
+            
+            # Validate results before display
+            validation_warnings = validate_comprehensive_results(results, states_tag, pharmacies_tag)
+            if validation_warnings:
+                st.warning("⚠️ **Data Quality Warnings**")
+                for warning in validation_warnings:
+                    st.warning(f"• {warning}")
+                st.write("---")
             
             # Display results
             display_comprehensive_results(results)
@@ -353,3 +438,55 @@ def render_match_analysis(df: pd.DataFrame):
             st.dataframe(top_matches[available_match_cols], use_container_width=True)
         else:
             st.dataframe(top_matches, use_container_width=True)
+
+
+def validate_comprehensive_results(results: List[Dict], states_tag: str, pharmacies_tag: str) -> List[str]:
+    """
+    Validate comprehensive results and return warnings about data quality issues.
+    
+    Fast local checks for common problems that should always be caught.
+    """
+    warnings = []
+    
+    if not results or len(results) == 0:
+        return warnings
+    
+    # Check 1: At least one result should have a score (primary validation)
+    results_with_scores = [r for r in results if r.get('score_overall') is not None and r.get('result_id') is not None]
+    results_needing_scores = [r for r in results if r.get('result_id') is not None and r.get('score_overall') is None]
+    
+    if len(results_needing_scores) > 0 and len(results_with_scores) == 0:
+        warnings.append(f"No scores found for {pharmacies_tag} + {states_tag}. Scoring should have been computed automatically.")
+    
+    # Check 2: Validate score ranges (scores should be 0-100)
+    invalid_scores = []
+    for r in results_with_scores:
+        score = r.get('score_overall')
+        if score is not None and (score < 0 or score > 100):
+            invalid_scores.append(score)
+    
+    if invalid_scores:
+        warnings.append(f"Found {len(invalid_scores)} scores outside valid range (0-100). Example: {invalid_scores[0]}")
+    
+    # Check 3: Results with search data should have license numbers
+    results_with_search = [r for r in results if r.get('result_id') is not None]
+    results_missing_license = [r for r in results_with_search if not r.get('license_number')]
+    
+    if len(results_missing_license) > 10:  # Only warn if significant number
+        warnings.append(f"{len(results_missing_license)} search results missing license numbers")
+    
+    # Check 4: Basic data consistency - pharmacy names should be consistent
+    pharmacy_name_mismatches = []
+    seen_pharmacies = {}
+    for r in results:
+        pid = r.get('pharmacy_id')
+        name = r.get('pharmacy_name')
+        if pid and name:
+            if pid in seen_pharmacies and seen_pharmacies[pid] != name:
+                pharmacy_name_mismatches.append(f"Pharmacy {pid}: '{seen_pharmacies[pid]}' vs '{name}'")
+            seen_pharmacies[pid] = name
+    
+    if pharmacy_name_mismatches:
+        warnings.append(f"Pharmacy name inconsistencies detected: {len(pharmacy_name_mismatches)} cases")
+    
+    return warnings
