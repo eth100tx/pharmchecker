@@ -47,7 +47,9 @@ st.set_page_config(
 @st.cache_resource
 def get_api_client():
     """Get cached API client instance"""
-    return create_client(prefer_supabase=True)
+    # Use environment variable to determine cloud vs local
+    from config import use_cloud_database
+    return create_client(prefer_supabase=use_cloud_database())
 
 def get_client():
     """Get API client with fallback initialization"""
@@ -311,18 +313,13 @@ def get_database_manager():
         def get_backend_info(self):
             client = get_client()
             backend_name = client.get_active_backend()
-            if 'Supabase' in backend_name:
-                return {
-                    'type': 'supabase',
-                    'backend': backend_name,
-                    'url': client.get_active_api_url()
-                }
-            else:
-                return {
-                    'type': 'postgresql', 
-                    'backend': backend_name,
-                    'url': client.get_active_api_url()
-                }
+            api_url = client.get_active_api_url()
+            return {
+                'type': 'api',  # Always API mode in this app
+                'active_backend': backend_name,
+                'api_url': api_url,
+                'fallback_available': False  # No fallback in new system
+            }
         
         def get_dataset_stats(self, kind: str, tag: str) -> Dict:
             # Delegate to the updated function
@@ -496,11 +493,8 @@ def render_sidebar():
                     st.sidebar.success(f"🔗 **{active_backend}**")
                     st.sidebar.caption(f"Local API: {api_url}")
                 
-                # Show fallback status
-                if backend_info.get('fallback_available'):
-                    st.sidebar.caption("✅ Fallback: Direct DB available")
-                else:
-                    st.sidebar.caption("⚠️ Fallback: None")
+                # No fallback in new system
+                st.sidebar.caption("⚠️ No fallback - fails hard if connection lost")
                     
             else:
                 # Direct database mode

@@ -32,11 +32,19 @@ def main():
     
     # Initialize client
     if 'client' not in st.session_state:
-        st.session_state.client = create_client(prefer_supabase=True)
+        # Use environment variable to determine backend
+        import sys, os
+        sys.path.append(os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(__file__)))))
+        from config import use_cloud_database
+        st.session_state.client = create_client(prefer_supabase=use_cloud_database())
     
     # Force refresh client if it doesn't have the new methods (for development)
     if not hasattr(st.session_state.client, 'delete_dataset') or not hasattr(st.session_state.client, 'get_table_counts'):
-        st.session_state.client = create_client(prefer_supabase=True)
+        # Use environment variable to determine backend
+        import sys, os
+        sys.path.append(os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(__file__)))))
+        from config import use_cloud_database
+        st.session_state.client = create_client(prefer_supabase=use_cloud_database())
     
     client = st.session_state.client
     

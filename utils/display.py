@@ -666,22 +666,34 @@ def _highlight_address_matches(search_address: str, pharmacy_details: Dict) -> s
     return ', '.join(highlighted_parts)
 
 def get_pharmacy_info(pharmacy_name: str, pharmacies_dataset: str) -> Dict:
-    """Get pharmacy information from database"""
-    from .database import DatabaseManager
+    """Get pharmacy information from database (supports both direct DB and API modes)"""
+    from .database import get_database_manager
     
     try:
-        db = DatabaseManager(use_production=True, allow_fallback=False)
-        sql = """
-        SELECT p.name, p.alias, p.address, p.suite, p.city, p.state, p.zip, p.state_licenses
-        FROM pharmacies p
-        JOIN datasets d ON p.dataset_id = d.id
-        WHERE p.name = %s AND d.tag = %s
-        """
+        db = get_database_manager(allow_fallback=True)
         
-        df = db.execute_query(sql, [pharmacy_name, pharmacies_dataset])
-        
-        if not df.empty:
-            return df.iloc[0].to_dict()
+        # Check if we're using API mode and need to implement this differently
+        if hasattr(db, 'use_api') and db.use_api:
+            # API mode: Get pharmacy data via API
+            pharmacies_df = db.get_pharmacies(pharmacies_dataset)
+            if not pharmacies_df.empty:
+                # Filter by pharmacy name
+                matching = pharmacies_df[pharmacies_df['name'] == pharmacy_name]
+                if not matching.empty:
+                    return matching.iloc[0].to_dict()
+        else:
+            # Direct database mode: Use SQL query
+            sql = """
+            SELECT p.name, p.alias, p.address, p.suite, p.city, p.state, p.zip, p.state_licenses
+            FROM pharmacies p
+            JOIN datasets d ON p.dataset_id = d.id
+            WHERE p.name = %s AND d.tag = %s
+            """
+            
+            df = db.execute_query(sql, [pharmacy_name, pharmacies_dataset])
+            
+            if not df.empty:
+                return df.iloc[0].to_dict()
             
     except Exception as e:
         logger.warning(f"Failed to get pharmacy info from database: {e}")

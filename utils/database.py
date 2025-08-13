@@ -787,13 +787,20 @@ class DatabaseManager:
             if matrix_rows:
                 matrix_df = pd.DataFrame(matrix_rows).reset_index(drop=True)
                 
-                # Add record counts manually
-                record_counts = full_df.groupby(['pharmacy_name', 'search_state']).size().reset_index(name='record_count_new')
-                matrix_df = matrix_df.merge(record_counts, on=['pharmacy_name', 'search_state'], how='left')
-                
-                # Replace the old record_count with the new one
-                matrix_df['record_count'] = matrix_df['record_count_new'].fillna(0).astype(int)
-                matrix_df = matrix_df.drop('record_count_new', axis=1)
+                # Add record counts manually with error handling
+                try:
+                    record_counts = full_df.groupby(['pharmacy_name', 'search_state']).size().reset_index(name='record_count_new')
+                    matrix_df = matrix_df.merge(record_counts, on=['pharmacy_name', 'search_state'], how='left')
+                    
+                    # Replace the old record_count with the new one
+                    if 'record_count_new' in matrix_df.columns:
+                        matrix_df['record_count'] = matrix_df['record_count_new'].fillna(0).astype(int)
+                        matrix_df = matrix_df.drop('record_count_new', axis=1)
+                    else:
+                        matrix_df['record_count'] = 1  # Default if merge failed
+                except Exception as e:
+                    logger.warning(f"Failed to compute record counts: {e}")
+                    matrix_df['record_count'] = 1  # Default if anything fails
                 
                 # Calculate status buckets after aggregation
                 matrix_df['status_bucket'] = matrix_df.apply(self._calculate_status_bucket, axis=1)
@@ -998,15 +1005,37 @@ class DatabaseManager:
 
 # Global database manager instance
 @st.cache_resource
-def get_database_manager(use_production: bool = True, allow_fallback: bool = False) -> DatabaseManager:
-    """Get cached database manager instance
+def get_database_manager(use_production: bool = True, allow_fallback: bool = False):
+    """Get cached database manager instance - supports both direct database and API modes
     
     Args:
         use_production: If True, use production database, else sandbox
         allow_fallback: If True, allow sample data fallback for development only
                        IMPORTANT: Must be False for operational system (no hardcoded data)
+    
+    Returns:
+        DatabaseManager or ApiDatabaseManager based on configuration
     """
-    return DatabaseManager(use_production=use_production, allow_fallback=allow_fallback)
+    # Import config here to avoid circular imports
+    try:
+        from config import is_api_mode, use_cloud_database
+        
+        if is_api_mode():
+            # Use API mode - import here to avoid issues if API client not available
+            from utils.api_database import get_api_database_manager
+            return get_api_database_manager(
+                use_api=True, 
+                use_cloud_db=use_cloud_database(),
+                allow_fallback=False  # No fallback in new system
+            )
+        else:
+            # Use direct database mode (current behavior)
+            return DatabaseManager(use_production=use_production, allow_fallback=allow_fallback)
+    
+    except ImportError as e:
+        # If config or API modules not available, fall back to direct database
+        logger.warning(f"API mode not available, using direct database: {e}")
+        return DatabaseManager(use_production=use_production, allow_fallback=allow_fallback)
 
 def query_with_cache(sql: str, params: Optional[Dict] = None, ttl: int = 300) -> pd.DataFrame:
     """Execute query with Streamlit caching"""

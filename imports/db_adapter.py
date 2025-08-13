@@ -296,9 +296,9 @@ def get_default_adapter() -> DatabaseAdapter:
     """Get default database adapter based on environment configuration"""
     # Check if Supabase is configured and preferred
     supabase_url = os.getenv('SUPABASE_URL')
-    prefer_supabase = os.getenv('PREFER_SUPABASE', '').lower() in ('true', '1', 'yes')
+    use_cloud_db = os.getenv('USE_CLOUD_DB', '').lower() in ('true', '1', 'yes')
     
-    if supabase_url and prefer_supabase:
+    if supabase_url and use_cloud_db:
         return create_adapter("supabase")
     else:
         return create_adapter("postgresql")

@@ -165,17 +165,28 @@ class UnifiedClient:
     """Unified client that can work with both PostgREST and Supabase"""
     
     def __init__(self, prefer_supabase: bool = False):
+        self.prefer_supabase = prefer_supabase
+        
+        # Initialize clients
         self.postgrest_client = PostgRESTClient()
         self.supabase_client = SupabaseClient() if SUPABASE_AVAILABLE else None
-        self.prefer_supabase = prefer_supabase and self.supabase_client is not None
         
-        # Determine which backend to use
-        self.use_supabase = self.prefer_supabase and self.supabase_available()
+        # NO FALLBACK: Use exactly what was requested
+        if prefer_supabase:
+            if not self.supabase_client:
+                raise Exception("Supabase requested but not available (missing dependencies or config)")
+            if not self.supabase_client.test_connection():
+                raise Exception("Supabase requested but connection failed")
+            self.use_supabase = True
+        else:
+            if not self.postgrest_client.test_connection():
+                raise Exception("PostgREST requested but connection failed")
+            self.use_supabase = False
         
         self.backend_info = {
-            "supabase_available": SUPABASE_AVAILABLE,
-            "supabase_client_available": self.supabase_client is not None,
+            "requested_backend": "supabase" if prefer_supabase else "postgrest",
             "using_supabase": self.use_supabase,
+            "supabase_available": SUPABASE_AVAILABLE,
             "postgrest_available": self.postgrest_client.test_connection()
         }
     
@@ -243,18 +254,7 @@ class UnifiedClient:
         else:
             return self.postgrest_client.get_table_data(table, limit, filters, select)
     
-    def switch_backend(self, use_supabase: bool = None) -> bool:
-        """Switch between backends"""
-        if use_supabase is None:
-            # Toggle
-            use_supabase = not self.use_supabase
-        
-        if use_supabase and not self.supabase_available():
-            return False
-        
-        self.use_supabase = use_supabase
-        self.backend_info["using_supabase"] = self.use_supabase
-        return True
+    # Removed switch_backend - no fallback behavior allowed
     
     def get_active_backend(self) -> str:
         """Get the name of the active backend"""
