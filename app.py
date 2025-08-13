@@ -274,6 +274,12 @@ def load_dataset_combination(pharmacy_tag: str, states_tag: str, validated_tag: 
             'validated': validated_tag
         }
         
+        # Update loaded_data with load time
+        from datetime import datetime
+        if 'loaded_data' not in st.session_state:
+            st.session_state.loaded_data = {}
+        st.session_state.loaded_data['last_load_time'] = datetime.now()
+        
         # Run validation checks
         validation_warnings = validate_comprehensive_results(results, states_tag, pharmacy_tag)
         if validation_warnings:
@@ -431,10 +437,14 @@ def render_sidebar():
         if 'validation_system_locked' not in st.session_state:
             st.session_state.validation_system_locked = True
         
-        # Toggle lock state button
-        lock_icon = "🔒" if st.session_state.validation_system_locked else "🔓"
-        if st.sidebar.button(f"{lock_icon} {'Locked' if st.session_state.validation_system_locked else 'Unlocked'}", key="validation_system_lock", help="Lock/unlock validation system"):
-            st.session_state.validation_system_locked = not st.session_state.validation_system_locked
+        # Toggle lock state with toggle switch
+        lock_state = st.sidebar.toggle(
+            "🔓 Validation Unlocked" if not st.session_state.validation_system_locked else "🔒 Validation Locked",
+            value=not st.session_state.validation_system_locked,
+            key="validation_system_toggle",
+            help="Toggle validation system lock/unlock"
+        )
+        st.session_state.validation_system_locked = not lock_state
     
     st.sidebar.markdown("---")
     
@@ -531,7 +541,7 @@ def render_dataset_manager():
     # Show current loaded data status
     if is_data_loaded():
         loaded_tags = get_loaded_tags()
-        last_load_time = st.session_state.loaded_data['last_load_time']
+        last_load_time = st.session_state.loaded_data.get('last_load_time')
         
         st.success("✅ **Data Loaded**")
         st.info(f"""
@@ -539,7 +549,7 @@ def render_dataset_manager():
         - **Pharmacies:** {loaded_tags['pharmacies']}
         - **States:** {loaded_tags['states']}  
         - **Validated:** {loaded_tags['validated'] or 'None'}
-        - **Loaded:** {last_load_time.strftime('%Y-%m-%d %H:%M:%S')}
+        - **Loaded:** {last_load_time.strftime('%Y-%m-%d %H:%M:%S') if last_load_time else 'Unknown'}
         """)
             
     else:
@@ -768,12 +778,15 @@ def render_results_matrix():
         db = get_database_manager()
         warning_check_df = db.aggregate_for_matrix(comprehensive_results)
         
-        # Find records with warnings
-        warning_records = warning_check_df[
-            warning_check_df['warnings'].notna() & 
-            (warning_check_df['warnings'].astype(str) != '') & 
-            (warning_check_df['warnings'].astype(str) != '[]')
-        ]
+        # Find records with warnings (only if warnings column exists)
+        if 'warnings' in warning_check_df.columns:
+            warning_records = warning_check_df[
+                warning_check_df['warnings'].notna() & 
+                (warning_check_df['warnings'].astype(str) != '') & 
+                (warning_check_df['warnings'].astype(str) != '[]')
+            ]
+        else:
+            warning_records = pd.DataFrame()  # Empty if no warnings column
         
         if len(warning_records) > 0:
             warning_status = f" | ⚠️ **{len(warning_records)} Warnings**"

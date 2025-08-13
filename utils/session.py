@@ -21,30 +21,45 @@ class SessionManager:
     def save_dataset_selection(self, datasets: Dict[str, Optional[str]]):
         """Save dataset selection to database"""
         try:
-            from .database import get_database_manager
-            
             user_id = self.auth.get_user_id()
             if not user_id:
                 logger.warning("No user ID - session will not persist across restarts")
                 return
             
-            db = get_database_manager()
-            
-            # Create session data
-            session_data = {
-                'dataset_selection': datasets,
-                'timestamp': datetime.now().isoformat()
-            }
-            
-            # Save to database
-            update_sql = """
-            UPDATE app_users 
-            SET session_data = %s, updated_at = now()
-            WHERE id = %s
-            """
-            
-            db.execute_query(update_sql, [json.dumps(session_data), user_id])
-            logger.info(f"Saved dataset selection to database: {datasets}")
+            # Check if we're in API mode - if so, skip database session persistence
+            try:
+                from .database import get_database_manager
+                db = get_database_manager()
+                
+                # Check if this is an API-only database manager
+                if hasattr(db, 'get_backend_info'):
+                    backend_info = db.get_backend_info()
+                    if backend_info.get('type') == 'api':
+                        logger.info("API mode detected - skipping session persistence")
+                        return
+                
+                # Create session data
+                session_data = {
+                    'dataset_selection': datasets,
+                    'timestamp': datetime.now().isoformat()
+                }
+                
+                # Save to database
+                update_sql = """
+                UPDATE app_users 
+                SET session_data = %s, updated_at = now()
+                WHERE id = %s
+                """
+                
+                db.execute_query(update_sql, [json.dumps(session_data), user_id])
+                logger.info(f"Saved dataset selection to database: {datasets}")
+                
+            except Exception as db_error:
+                if "Direct SQL" in str(db_error) or "not supported" in str(db_error):
+                    logger.info("Direct SQL not supported - skipping session persistence")
+                    return
+                else:
+                    raise db_error
             
         except Exception as e:
             logger.error(f"Failed to save dataset selection: {e}")
@@ -52,9 +67,25 @@ class SessionManager:
     def get_available_datasets(self) -> Dict[str, list]:
         """Get all available dataset tags by kind"""
         try:
-            from .database import get_database_manager
-            db = get_database_manager()
-            return db.get_datasets()
+            # Use API client instead of direct database access
+            import sys
+            import os
+            sys.path.append(os.path.join(os.path.dirname(os.path.abspath(__file__)), '..', 'api_poc', 'gui'))
+            from client import create_client
+            from config import use_cloud_database
+            
+            client = create_client(prefer_supabase=use_cloud_database())
+            datasets = client.get_datasets()
+            
+            # Group by kind
+            result = {'pharmacies': [], 'states': [], 'validated': []}
+            for dataset in datasets:
+                kind = dataset.get('kind')
+                tag = dataset.get('tag')
+                if kind in result and tag:
+                    result[kind].append(tag)
+            
+            return result
         except Exception as e:
             logger.error(f"Failed to get available datasets: {e}")
             return {'pharmacies': [], 'states': [], 'validated': []}
@@ -67,52 +98,68 @@ class SessionManager:
                 logger.debug("No user ID - cannot restore session")
                 return None
             
-            from .database import get_database_manager
-            db = get_database_manager()
-            
-            # Get saved session data
-            select_sql = """
-            SELECT session_data 
-            FROM app_users 
-            WHERE id = %s AND session_data IS NOT NULL
-            """
-            
-            result_df = db.execute_query(select_sql, [user_id])
-            
-            if result_df.empty:
-                logger.debug("No saved session data found")
-                return None
-            
-            session_data_str = result_df.iloc[0]['session_data']
-            if not session_data_str:
-                return None
-            
-            session_data = json.loads(session_data_str) if isinstance(session_data_str, str) else session_data_str
-            saved_datasets = session_data.get('dataset_selection', {})
-            
-            if not any(v for v in saved_datasets.values()):
-                return None
-            
-            # Validate against currently available datasets
-            available = self.get_available_datasets()
-            validated_datasets = {}
-            
-            for kind, saved_tag in saved_datasets.items():
-                if saved_tag and saved_tag in available.get(kind, []):
-                    validated_datasets[kind] = saved_tag
-                    logger.info(f"Restored {kind}: {saved_tag}")
+            # Check if we're in API mode - if so, skip session restoration
+            try:
+                from .database import get_database_manager
+                db = get_database_manager()
+                
+                # Check if this is an API-only database manager
+                if hasattr(db, 'get_backend_info'):
+                    backend_info = db.get_backend_info()
+                    if backend_info.get('type') == 'api':
+                        logger.info("API mode detected - skipping session restoration")
+                        return None
+                
+                # Get saved session data
+                select_sql = """
+                SELECT session_data 
+                FROM app_users 
+                WHERE id = %s AND session_data IS NOT NULL
+                """
+                
+                result_df = db.execute_query(select_sql, [user_id])
+                
+                if result_df.empty:
+                    logger.debug("No saved session data found")
+                    return None
+                
+                session_data_str = result_df.iloc[0]['session_data']
+                if not session_data_str:
+                    return None
+                
+                session_data = json.loads(session_data_str) if isinstance(session_data_str, str) else session_data_str
+                saved_datasets = session_data.get('dataset_selection', {})
+                
+                if not any(v for v in saved_datasets.values()):
+                    return None
+                
+                # Validate against currently available datasets
+                available = self.get_available_datasets()
+                validated_datasets = {}
+                
+                for kind, saved_tag in saved_datasets.items():
+                    if saved_tag and saved_tag in available.get(kind, []):
+                        validated_datasets[kind] = saved_tag
+                        logger.info(f"Restored {kind}: {saved_tag}")
+                    else:
+                        validated_datasets[kind] = None
+                        if saved_tag:
+                            logger.warning(f"Saved {kind} dataset '{saved_tag}' no longer exists")
+                
+                # Only return if we have at least pharmacies and states
+                if validated_datasets.get('pharmacies') and validated_datasets.get('states'):
+                    logger.info(f"Successfully restored valid dataset selection: {validated_datasets}")
+                    return validated_datasets
                 else:
-                    validated_datasets[kind] = None
-                    if saved_tag:
-                        logger.warning(f"Saved {kind} dataset '{saved_tag}' no longer exists")
-            
-            # Only return if we have at least pharmacies and states
-            if validated_datasets.get('pharmacies') and validated_datasets.get('states'):
-                logger.info(f"Successfully restored valid dataset selection: {validated_datasets}")
-                return validated_datasets
-            else:
-                logger.info("Saved session incomplete - missing required datasets")
-                return None
+                    logger.info("Saved session incomplete - missing required datasets")
+                    return None
+                
+            except Exception as db_error:
+                if "Direct SQL" in str(db_error) or "not supported" in str(db_error):
+                    logger.info("Direct SQL not supported - skipping session restoration")
+                    return None
+                else:
+                    raise db_error
             
         except Exception as e:
             logger.error(f"Failed to restore dataset selections: {e}")

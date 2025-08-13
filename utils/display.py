@@ -487,20 +487,21 @@ def display_row_detail_section(selected_row: Dict, datasets: Dict[str, str], deb
         # mentioned by user: for empty records, validate button goes in Pharmacy info section
         st.markdown("**Validation:**")
         
+        # Create a mock result for empty validation (always create to avoid None errors)
+        empty_result = pd.Series({
+            'search_name': selected_row['pharmacy_name'],
+            'search_state': selected_row['search_state'],
+            'state': selected_row['search_state'],
+            'license_number': '',  # Empty for empty validations
+            'override_type': None  # Will be set if already validated
+        })
+        
         # Check if validation system is locked
         system_locked = st.session_state.get('validation_system_locked', True)
         
         if system_locked:
             st.info("🔒 Unlock validation in sidebar to validate empty records")
         else:
-            # Create a mock result for empty validation  
-            empty_result = pd.Series({
-                'search_name': selected_row['pharmacy_name'],
-                'search_state': selected_row['search_state'],
-                'state': selected_row['search_state'],
-                'license_number': '',  # Empty for empty validations
-                'override_type': None  # Will be set if already validated
-            })
             
             # Check if this pharmacy-state combination is already validated as empty
             try:
@@ -948,47 +949,86 @@ def display_simple_validation_controls(result: pd.Series, datasets: Dict, result
                             'empty' if validated else 'remove')
 
 def toggle_validation_simple(pharmacy_name: str, state_code: str, license_number: str, action: str):
-    """Simple validation toggle - database write + full reload"""
+    """Simple validation toggle - API-based operation + reload"""
     try:
-        from imports.validated import ValidatedImporter
+        # Use API client instead of direct SQL
+        from app import get_client
+        client = get_client()
         
-        with ValidatedImporter() as importer:
-            # Get current dataset info
-            loaded_tags = st.session_state.loaded_data['loaded_tags']
-            validated_tag = loaded_tags.get('validated')
+        # Get current dataset info
+        loaded_tags = st.session_state.get('loaded_tags', {})
+        validated_tag = loaded_tags.get('validated')
+        
+        # Auto-create validation dataset if needed
+        if not validated_tag:
+            validated_tag = f"validation_{datetime.now().strftime('%Y%m%d_%H%M%S')}"
+            create_result = client.create_dataset(
+                kind='validated',
+                tag=validated_tag,
+                description=f"Auto-created validation dataset for {pharmacy_name}",
+                created_by='gui_user'
+            )
             
-            # Auto-create validation dataset if needed
-            if not validated_tag:
-                validated_tag = f"validation_{datetime.now().strftime('%Y%m%d_%H%M%S')}"
-                dataset_id = importer.create_dataset('validated', validated_tag, 
-                                                   "GUI-created validation dataset", 'gui_user')
-                st.session_state.loaded_data['loaded_tags']['validated'] = validated_tag
+            if create_result.get('success'):
+                dataset_id = create_result.get('dataset_id')
+                actual_tag = create_result.get('tag')  # May be different if made unique
+                st.info(f"✨ Created validation dataset: {actual_tag}")
+                
+                # Update session state to use new dataset
+                st.session_state.loaded_tags['validated'] = actual_tag
+                st.session_state.selected_datasets['validated'] = actual_tag
+                
+                # Clear cache to refresh dataset lists
+                if hasattr(st, 'cache_data'):
+                    st.cache_data.clear()
             else:
-                # Get existing dataset ID
-                with importer.conn.cursor() as cur:
-                    cur.execute("SELECT id FROM datasets WHERE kind = 'validated' AND tag = %s", [validated_tag])
-                    result = cur.fetchone()
-                    dataset_id = result[0] if result else None
+                st.error(f"Failed to create validation dataset: {create_result.get('error', 'Unknown error')}")
+                return
+        else:
+            # Get existing dataset ID via API
+            all_datasets = client.get_datasets()
+            dataset_id = None
+            for dataset in all_datasets:
+                if dataset.get('kind') == 'validated' and dataset.get('tag') == validated_tag:
+                    dataset_id = dataset.get('id')
+                    break
+        
+        if not dataset_id:
+            st.error(f"Could not find validation dataset: {validated_tag}")
+            return
             
-            if not dataset_id:
-                st.error(f"Could not find validation dataset: {validated_tag}")
+        # Perform API operation
+        if action in ['present', 'empty']:
+            result = client.create_validation_record(
+                dataset_id=dataset_id,
+                pharmacy_name=pharmacy_name,
+                state_code=state_code,
+                license_number=license_number if action == 'present' else '',
+                override_type=action,
+                reason=f"GUI validation toggle - {action}",
+                validated_by='gui_user'
+            )
+            success = result.get('success')
+            if not success:
+                st.error(f"Validation failed: {result.get('error', 'Unknown error')}")
                 return
                 
-            # Perform database operation
-            if action in ['present', 'empty']:
-                success = importer.create_validation_record(
-                    dataset_id, pharmacy_name, state_code, license_number,
-                    action, "GUI validation", 'gui_user'
-                )
-            else:  # remove
-                success = importer.remove_validation_record(
-                    dataset_id, pharmacy_name, state_code, license_number
-                )
-            
-            if success:
-                # FULL RELOAD - no cache patching needed
-                reload_comprehensive_results()
-                st.rerun()
+        else:  # remove
+            result = client.delete_validation_record(
+                dataset_id=dataset_id,
+                pharmacy_name=pharmacy_name,
+                state_code=state_code,
+                license_number=license_number if license_number else None
+            )
+            success = result.get('success')
+            if not success:
+                st.error(f"Remove failed: {result.get('error', 'Unknown error')}")
+                return
+        
+        if success:
+            # FULL RELOAD - no cache patching needed
+            reload_comprehensive_results()
+            st.rerun()
                 
     except Exception as e:
         st.error(f"Validation action failed: {e}")
@@ -1047,26 +1087,40 @@ def get_validation_controls(row: pd.Series, result_idx: int):
 
 def reload_comprehensive_results():
     """Reload comprehensive results with fresh validation data"""
-    from utils.database import get_database_manager
+    # Use API client instead of direct database manager
+    from app import get_client
+    client = get_client()
     
-    loaded_tags = st.session_state.loaded_data['loaded_tags']
-    db = get_database_manager()
+    # Get tags from selected_datasets (which includes newly created validation datasets)
+    selected_datasets = st.session_state.get('selected_datasets', {})
+    states_tag = selected_datasets.get('states')
+    pharmacies_tag = selected_datasets.get('pharmacies') 
+    validated_tag = selected_datasets.get('validated', '')
     
-    # Get fresh data from database (includes updated validation JOINs)
-    comprehensive_results = db.get_comprehensive_results(
-        loaded_tags['states'], 
-        loaded_tags['pharmacies'], 
-        loaded_tags['validated']
-    )
+    if not states_tag or not pharmacies_tag:
+        st.error("Cannot reload: missing required dataset selections")
+        return
     
-    # Update session state
-    st.session_state.loaded_data['comprehensive_results'] = comprehensive_results
+    # Get fresh data from API (includes updated validation JOINs)
+    results = client.get_comprehensive_results(states_tag, pharmacies_tag, validated_tag)
     
-    # Run validation consistency check
-    from utils.validation_local import run_validation_consistency_check
-    validation_warnings = run_validation_consistency_check(comprehensive_results, loaded_tags['validated'])
-    if validation_warnings:
-        st.sidebar.warning(f"⚠️ {len(validation_warnings)} validation issues detected")
+    if isinstance(results, dict) and 'error' in results:
+        st.error(f"Failed to reload data: {results['error']}")
+        return
+    
+    # Update session state with new data
+    st.session_state.comprehensive_results = pd.DataFrame(results)
+    
+    # Also update loaded_tags to keep everything in sync
+    st.session_state.loaded_tags = {
+        'states': states_tag,
+        'pharmacies': pharmacies_tag,
+        'validated': validated_tag
+    }
+    
+    # Update loaded_data structure too
+    if 'loaded_data' in st.session_state:
+        st.session_state.loaded_data['loaded_tags'] = st.session_state.loaded_tags
 
 def display_detailed_validation_controls(result: pd.Series, datasets: Dict, result_idx: int) -> None:
     """Display reactive validation controls with instant updates"""
@@ -1383,140 +1437,192 @@ def handle_validation_toggle(result: pd.Series, datasets: Dict, action: str) -> 
         True if action was successful, False otherwise
     """
     
+    if result is None:
+        st.error("Validation action failed: No result data provided")
+        return False
+    
+    if datasets is None:
+        st.error("Validation action failed: No dataset information provided")
+        return False
+    
     pharmacy_name = result.get('search_name', 'Unknown')
     state = result.get('search_state', 'Unknown')  # Use search_state, not result state
     license_num = result.get('license_number', '') or ''
     
     try:
-        with ValidatedImporter() as importer:
-            if action == 'present':
-                # Determine dataset to use
-                validated_tag = datasets.get('validated')
-                if not validated_tag:
-                    # Create new validation dataset
-                    validated_tag = f"validation_{datetime.now().strftime('%Y%m%d_%H%M%S')}"
-                    dataset_id = importer.create_dataset(
-                        'validated', 
-                        validated_tag, 
-                        f"Auto-created validation dataset for {pharmacy_name} - {state}",
-                        'gui_user'
-                    )
-                    st.info(f"✨ Created validation dataset: {validated_tag}")
+        # Use API client instead of direct SQL
+        from app import get_client
+        client = get_client()
+        
+        if action == 'present':
+            # Determine dataset to use
+            validated_tag = datasets.get('validated')
+            dataset_id = None
+            
+            if not validated_tag:
+                # Create new validation dataset via API
+                validated_tag = f"validation_{datetime.now().strftime('%Y%m%d_%H%M%S')}"
+                create_result = client.create_dataset(
+                    kind='validated',
+                    tag=validated_tag,
+                    description=f"Auto-created validation dataset for {pharmacy_name} - {state}",
+                    created_by='gui_user'
+                )
+                
+                if create_result.get('success'):
+                    dataset_id = create_result.get('dataset_id')
+                    actual_tag = create_result.get('tag')  # May be different if made unique
+                    st.info(f"✨ Created validation dataset: {actual_tag}")
+                    
                     # Update session state to use new dataset
-                    st.session_state.selected_datasets['validated'] = validated_tag
+                    st.session_state.selected_datasets['validated'] = actual_tag
+                    
+                    # Update the local datasets variable for the rest of this function
+                    datasets = st.session_state.selected_datasets.copy()
+                    
                     # Clear cache to refresh dataset lists
                     if hasattr(st, 'cache_data'):
                         st.cache_data.clear()
                 else:
-                    # Get existing dataset ID
-                    with importer.conn.cursor() as cur:
-                        cur.execute("SELECT id FROM datasets WHERE kind = 'validated' AND tag = %s", [validated_tag])
-                        result_row = cur.fetchone()
-                        if result_row:
-                            dataset_id = result_row[0]
-                        else:
-                            st.error(f"Validation dataset '{validated_tag}' not found")
-                            return False
-                
-                # Create validation record
-                success = importer.create_validation_record(
-                    dataset_id=dataset_id,
-                    pharmacy_name=pharmacy_name,
-                    state_code=state,
-                    license_number=license_num,
-                    override_type='present',
-                    reason=f"Manual validation via GUI - marked as present",
-                    validated_by='gui_user'
-                )
-                
-                if success:
-                    st.success(f"✅ Validated {pharmacy_name} - {state} - {license_num} as PRESENT")
-                    return True
-                else:
-                    st.error("Failed to create validation record")
+                    st.error(f"Failed to create validation dataset: {create_result.get('error', 'Unknown error')}")
                     return False
-            
-            elif action == 'empty':
-                # Determine dataset to use
-                validated_tag = datasets.get('validated')
-                if not validated_tag:
-                    # Create new validation dataset
-                    validated_tag = f"validation_{datetime.now().strftime('%Y%m%d_%H%M%S')}"
-                    dataset_id = importer.create_dataset(
-                        'validated',
-                        validated_tag,
-                        f"Auto-created validation dataset for {pharmacy_name} - {state}",
-                        'gui_user'
-                    )
-                    st.info(f"✨ Created validation dataset: {validated_tag}")
-                    # Update session state to use new dataset
-                    st.session_state.selected_datasets['validated'] = validated_tag
-                    # Clear cache to refresh dataset lists
-                    if hasattr(st, 'cache_data'):
-                        st.cache_data.clear()
-                else:
-                    # Get existing dataset ID
-                    with importer.conn.cursor() as cur:
-                        cur.execute("SELECT id FROM datasets WHERE kind = 'validated' AND tag = %s", [validated_tag])
-                        result_row = cur.fetchone()
-                        if result_row:
-                            dataset_id = result_row[0]
-                        else:
-                            st.error(f"Validation dataset '{validated_tag}' not found")
-                            return False
-                
-                # Create validation record
-                success = importer.create_validation_record(
-                    dataset_id=dataset_id,
-                    pharmacy_name=pharmacy_name,
-                    state_code=state,
-                    license_number='',  # Empty for 'empty' validations
-                    override_type='empty',
-                    reason=f"Manual validation via GUI - marked as empty",
-                    validated_by='gui_user'
-                )
-                
-                if success:
-                    st.success(f"✅ Validated {pharmacy_name} - {state} as EMPTY")
-                    return True
-                else:
-                    st.error("Failed to create validation record")
-                    return False
-            
-            elif action == 'remove':
-                validated_tag = datasets.get('validated')
-                if not validated_tag:
-                    st.error("No validation dataset selected")
-                    return False
-                
-                # Get dataset ID
-                with importer.conn.cursor() as cur:
-                    cur.execute("SELECT id FROM datasets WHERE kind = 'validated' AND tag = %s", [validated_tag])
-                    result_row = cur.fetchone()
-                    if result_row:
-                        dataset_id = result_row[0]
-                    else:
-                        st.error(f"Validation dataset '{validated_tag}' not found")
-                        return False
-                
-                # Remove validation record
-                success = importer.remove_validation_record(
-                    dataset_id=dataset_id,
-                    pharmacy_name=pharmacy_name,
-                    state_code=state,
-                    license_number=license_num
-                )
-                
-                if success:
-                    st.success(f"🗑️ Removed validation for {pharmacy_name} - {state} - {license_num}")
-                    return True
-                else:
-                    st.warning("No validation record found to remove")
-                    return False
-            
             else:
-                st.error(f"Unknown validation action: {action}")
+                # Get existing dataset ID via API
+                all_datasets = client.get_datasets()
+                for dataset in all_datasets:
+                    if dataset.get('kind') == 'validated' and dataset.get('tag') == validated_tag:
+                        dataset_id = dataset.get('id')
+                        break
+                
+                if not dataset_id:
+                    st.error(f"Validation dataset '{validated_tag}' not found")
+                    return False
+            
+            # Create validation record via API
+            result = client.create_validation_record(
+                dataset_id=dataset_id,
+                pharmacy_name=pharmacy_name,
+                state_code=state,
+                license_number=license_num,
+                override_type='present',
+                reason=f"Manual validation via GUI - marked as present",
+                validated_by='gui_user'
+            )
+            
+            if result.get('success'):
+                st.success(f"✅ Validated {pharmacy_name} - {state} - {license_num} as PRESENT")
+                
+                # Reload comprehensive results to include the new validation data
+                reload_comprehensive_results()
+                return True
+            else:
+                st.error(f"Failed to create validation record: {result.get('error', 'Unknown error')}")
                 return False
+            
+        elif action == 'empty':
+            # Determine dataset to use
+            validated_tag = datasets.get('validated')
+            dataset_id = None
+            
+            if not validated_tag:
+                # Create new validation dataset via API
+                validated_tag = f"validation_{datetime.now().strftime('%Y%m%d_%H%M%S')}"
+                create_result = client.create_dataset(
+                    kind='validated',
+                    tag=validated_tag,
+                    description=f"Auto-created validation dataset for {pharmacy_name} - {state}",
+                    created_by='gui_user'
+                )
+                
+                if create_result.get('success'):
+                    dataset_id = create_result.get('dataset_id')
+                    actual_tag = create_result.get('tag')  # May be different if made unique
+                    st.info(f"✨ Created validation dataset: {actual_tag}")
+                    
+                    # Update session state to use new dataset
+                    st.session_state.selected_datasets['validated'] = actual_tag
+                    
+                    # Update the local datasets variable for the rest of this function
+                    datasets = st.session_state.selected_datasets.copy()
+                    
+                    # Clear cache to refresh dataset lists
+                    if hasattr(st, 'cache_data'):
+                        st.cache_data.clear()
+                else:
+                    st.error(f"Failed to create validation dataset: {create_result.get('error', 'Unknown error')}")
+                    return False
+            else:
+                # Get existing dataset ID via API
+                all_datasets = client.get_datasets()
+                for dataset in all_datasets:
+                    if dataset.get('kind') == 'validated' and dataset.get('tag') == validated_tag:
+                        dataset_id = dataset.get('id')
+                        break
+                
+                if not dataset_id:
+                    st.error(f"Validation dataset '{validated_tag}' not found")
+                    return False
+            
+            # Create validation record via API
+            result = client.create_validation_record(
+                dataset_id=dataset_id,
+                pharmacy_name=pharmacy_name,
+                state_code=state,
+                license_number='',  # Empty for 'empty' validations
+                override_type='empty',
+                reason=f"Manual validation via GUI - marked as empty",
+                validated_by='gui_user'
+            )
+            
+            if result.get('success'):
+                st.success(f"✅ Validated {pharmacy_name} - {state} as EMPTY")
+                
+                # Reload comprehensive results to include the new validation data
+                reload_comprehensive_results()
+                return True
+            else:
+                st.error(f"Failed to create validation record: {result.get('error', 'Unknown error')}")
+                return False
+            
+        elif action == 'remove':
+            validated_tag = datasets.get('validated')
+            if not validated_tag:
+                st.error("No validation dataset selected")
+                return False
+            
+            # Get dataset ID via API
+            all_datasets = client.get_datasets()
+            dataset_id = None
+            for dataset in all_datasets:
+                if dataset.get('kind') == 'validated' and dataset.get('tag') == validated_tag:
+                    dataset_id = dataset.get('id')
+                    break
+            
+            if not dataset_id:
+                st.error(f"Validation dataset '{validated_tag}' not found")
+                return False
+            
+            # Remove validation record via API
+            result = client.delete_validation_record(
+                dataset_id=dataset_id,
+                pharmacy_name=pharmacy_name,
+                state_code=state,
+                license_number=license_num if license_num else None
+            )
+            
+            if result.get('success'):
+                st.success(f"🗑️ Removed validation for {pharmacy_name} - {state} - {license_num}")
+                
+                # Reload comprehensive results to include the updated validation data
+                reload_comprehensive_results()
+                return True
+            else:
+                st.warning(f"Failed to remove validation: {result.get('error', 'Unknown error')}")
+                return False
+            
+        else:
+            st.error(f"Unknown validation action: {action}")
+            return False
                 
     except Exception as e:
         st.error(f"Error performing validation action: {e}")

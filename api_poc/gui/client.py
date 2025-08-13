@@ -211,6 +211,95 @@ class PostgRESTClient:
             except Exception as e:
                 counts[table] = f"Error: {str(e)[:30]}"
         return counts
+    
+    def create_validation_record(self, dataset_id: int, record: Dict) -> Dict:
+        """Create a validation record in validated_overrides table"""
+        try:
+            # Ensure dataset_id is included
+            record['dataset_id'] = dataset_id
+            
+            response = self._request('POST', 'validated_overrides', data=[record])
+            return {"success": True, "message": "Validation record created"}
+        except Exception as e:
+            return {"error": str(e)}
+    
+    def delete_validation_record(self, dataset_id: int, pharmacy_name: str, state_code: str, license_number: str = None) -> Dict:
+        """Delete a validation record from validated_overrides table"""
+        try:
+            # Build filter for deletion
+            filters = {
+                'dataset_id': f'eq.{dataset_id}',
+                'pharmacy_name': f'eq.{pharmacy_name}',
+                'state_code': f'eq.{state_code}'
+            }
+            
+            if license_number:
+                filters['license_number'] = f'eq.{license_number}'
+            else:
+                # For empty validations, license_number is empty or null
+                filters['license_number'] = 'is.null'
+            
+            response = self._request('DELETE', 'validated_overrides', params=filters)
+            return {"success": True, "message": "Validation record deleted"}
+        except Exception as e:
+            return {"error": str(e)}
+    
+    def create_dataset(self, kind: str, tag: str, description: str = None, created_by: str = "api_user") -> Dict:
+        """Create a new dataset via PostgREST"""
+        try:
+            # Find unique tag if conflicts exist
+            unique_tag = self._find_unique_tag(kind, tag)
+            
+            record = {
+                'kind': kind,
+                'tag': unique_tag,
+                'description': description,
+                'created_by': created_by
+            }
+            
+            response = self._request('POST', 'datasets', data=[record])
+            
+            # Get the created dataset to return ID
+            created_response = self._request('GET', f'datasets?kind=eq.{kind}&tag=eq.{unique_tag}')
+            datasets = created_response.json()
+            
+            if datasets:
+                dataset_id = datasets[0]['id']
+                return {"success": True, "dataset_id": dataset_id, "tag": unique_tag}
+            else:
+                return {"error": "Dataset created but could not retrieve ID"}
+                
+        except Exception as e:
+            return {"error": str(e)}
+    
+    def _find_unique_tag(self, kind: str, base_tag: str) -> str:
+        """Find a unique tag by adding (2), (3), etc. if conflicts exist"""
+        try:
+            # Check if base tag exists
+            response = self._request('GET', f'datasets?kind=eq.{kind}&tag=eq.{base_tag}')
+            existing = response.json()
+            
+            if not existing:
+                return base_tag
+            
+            # Find next available number
+            counter = 2
+            while True:
+                test_tag = f"{base_tag} ({counter})"
+                response = self._request('GET', f'datasets?kind=eq.{kind}&tag=eq.{test_tag}')
+                existing = response.json()
+                
+                if not existing:
+                    return test_tag
+                counter += 1
+                
+                # Safety limit
+                if counter > 100:
+                    return f"{base_tag} ({counter})"
+                    
+        except Exception:
+            # If we can't check for uniqueness, just return base tag
+            return base_tag
 
 
 class UnifiedClient:
@@ -647,6 +736,154 @@ class UnifiedClient:
                 return {'success': True, 'message': 'Scores cleared'}
             except Exception as e:
                 return {'error': str(e)}
+    
+    def create_validation_record(self, dataset_id: int, pharmacy_name: str, state_code: str, 
+                               license_number: str, override_type: str, reason: str, 
+                               validated_by: str = "gui_user") -> Dict:
+        """Create a validation record via API"""
+        from datetime import datetime
+        
+        record = {
+            'pharmacy_name': pharmacy_name,
+            'state_code': state_code,
+            'license_number': license_number or '',
+            'override_type': override_type,
+            'reason': reason,
+            'validated_by': validated_by,
+            'validated_at': datetime.now().isoformat()
+        }
+        
+        if self.use_supabase:
+            # Use Supabase REST API
+            try:
+                import requests
+                url = f"{self.supabase_client.url}/rest/v1/validated_overrides"
+                record['dataset_id'] = dataset_id
+                
+                response = requests.post(url, 
+                                       headers=self.supabase_client.headers,
+                                       json=[record],  # Supabase expects array
+                                       timeout=30)
+                
+                if response.status_code in [200, 201]:
+                    return {"success": True, "message": "Validation record created"}
+                else:
+                    return {"error": f"Failed to create validation: {response.status_code} {response.text}"}
+            except Exception as e:
+                return {"error": str(e)}
+        else:
+            # Use PostgREST
+            return self.postgrest_client.create_validation_record(dataset_id, record)
+    
+    def delete_validation_record(self, dataset_id: int, pharmacy_name: str, state_code: str, 
+                               license_number: str = None) -> Dict:
+        """Delete a validation record via API"""
+        if self.use_supabase:
+            # Use Supabase REST API
+            try:
+                import requests
+                url = f"{self.supabase_client.url}/rest/v1/validated_overrides"
+                
+                params = {
+                    'dataset_id': f'eq.{dataset_id}',
+                    'pharmacy_name': f'eq.{pharmacy_name}',
+                    'state_code': f'eq.{state_code}'
+                }
+                
+                if license_number:
+                    params['license_number'] = f'eq.{license_number}'
+                else:
+                    params['license_number'] = 'is.null'
+                
+                response = requests.delete(url, 
+                                         headers=self.supabase_client.headers,
+                                         params=params,
+                                         timeout=30)
+                
+                if response.status_code in [200, 204]:
+                    return {"success": True, "message": "Validation record deleted"}
+                else:
+                    return {"error": f"Failed to delete validation: {response.status_code} {response.text}"}
+            except Exception as e:
+                return {"error": str(e)}
+        else:
+            # Use PostgREST
+            return self.postgrest_client.delete_validation_record(dataset_id, pharmacy_name, state_code, license_number)
+    
+    def create_dataset(self, kind: str, tag: str, description: str = None, created_by: str = "gui_user") -> Dict:
+        """Create a new dataset via API"""
+        if self.use_supabase:
+            # Use Supabase REST API
+            try:
+                import requests
+                
+                # Find unique tag if conflicts exist
+                unique_tag = self._find_unique_tag(kind, tag)
+                
+                record = {
+                    'kind': kind,
+                    'tag': unique_tag,
+                    'description': description,
+                    'created_by': created_by
+                }
+                
+                url = f"{self.supabase_client.url}/rest/v1/datasets"
+                response = requests.post(url, 
+                                       headers=self.supabase_client.headers,
+                                       json=[record],  # Supabase expects array
+                                       timeout=30)
+                
+                if response.status_code in [200, 201]:
+                    # Get the created dataset to return ID
+                    get_url = f"{self.supabase_client.url}/rest/v1/datasets"
+                    params = {'kind': f'eq.{kind}', 'tag': f'eq.{unique_tag}'}
+                    get_response = requests.get(get_url, 
+                                              headers=self.supabase_client.headers,
+                                              params=params,
+                                              timeout=30)
+                    
+                    if get_response.status_code == 200:
+                        datasets = get_response.json()
+                        if datasets:
+                            dataset_id = datasets[0]['id']
+                            return {"success": True, "dataset_id": dataset_id, "tag": unique_tag}
+                    
+                    return {"error": "Dataset created but could not retrieve ID"}
+                else:
+                    return {"error": f"Failed to create dataset: {response.status_code} {response.text}"}
+            except Exception as e:
+                return {"error": str(e)}
+        else:
+            # Use PostgREST
+            return self.postgrest_client.create_dataset(kind, tag, description, created_by)
+    
+    def _find_unique_tag(self, kind: str, base_tag: str) -> str:
+        """Find a unique tag by adding (2), (3), etc. if conflicts exist"""
+        try:
+            # Check if base tag exists
+            datasets = self.get_datasets()
+            existing = [d for d in datasets if d.get('kind') == kind and d.get('tag') == base_tag]
+            
+            if not existing:
+                return base_tag
+            
+            # Find next available number
+            counter = 2
+            while True:
+                test_tag = f"{base_tag} ({counter})"
+                existing = [d for d in datasets if d.get('kind') == kind and d.get('tag') == test_tag]
+                
+                if not existing:
+                    return test_tag
+                counter += 1
+                
+                # Safety limit
+                if counter > 100:
+                    return f"{base_tag} ({counter})"
+                    
+        except Exception:
+            # If we can't check for uniqueness, just return base tag
+            return base_tag
 
 
 def create_client(prefer_supabase: bool = False) -> UnifiedClient:

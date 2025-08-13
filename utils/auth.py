@@ -90,7 +90,10 @@ class AuthManager:
                 st.session_state.user = user_data
                 
             except Exception as e:
-                logger.error(f"Database error during authentication: {e}")
+                if "Direct SQL" in str(e) or "not supported" in str(e):
+                    logger.info("Direct SQL not supported - using fallback authentication")
+                else:
+                    logger.error(f"Database error during authentication: {e}")
                 return self._create_fallback_user()
             
         return st.session_state.user
