@@ -13,6 +13,7 @@ from pathlib import Path
 from datetime import datetime
 from typing import Dict, Any, Optional, List
 from dotenv import load_dotenv
+from utils.image_storage import create_image_storage
 
 load_dotenv()
 
@@ -159,8 +160,8 @@ class APIImporter:
                 'city': str(row.get('city', '')).strip() if not pd.isna(row.get('city')) else None,
                 'state': str(row.get('state', '')).strip()[:2] if not pd.isna(row.get('state')) else None,
                 'zip': str(int(row.get('zip', 0))) if not pd.isna(row.get('zip')) and row.get('zip') != '' else None,
-                'state_licenses': json.dumps(state_licenses),
-                'additional_info': json.dumps(additional_info) if additional_info else None
+                'state_licenses': state_licenses,  # Send as array, not JSON string
+                'additional_info': additional_info if additional_info else None
             }
             
             # Remove None values for cleaner API calls
@@ -212,7 +213,9 @@ class APIImporter:
         
         # Process all JSON files in subdirectories
         search_results = []
-        image_records = []
+        
+        # Create image storage handler for processing images during JSON parsing
+        storage = create_image_storage(self.backend)
         
         # Find all JSON files
         json_files = list(states_dir.rglob("*_parse.json"))
@@ -239,6 +242,49 @@ class APIImporter:
                     except:
                         search_ts = None
                 
+                # Process corresponding PNG file immediately to get image_hash
+                image_hash = None
+                png_filename = json_file.stem.replace('_parse', '') + '.png'
+                png_file = json_file.parent / png_filename
+                if png_file.exists():
+                    try:
+                        # Compute hash and store image if needed
+                        content_hash = storage.compute_sha256(png_file)
+                        
+                        # Check if asset already exists
+                        existing_asset = self._check_image_asset_exists(content_hash)
+                        
+                        if not existing_asset:
+                            # Store image and create asset record
+                            content_hash, storage_path, img_metadata = storage.store_image(png_file)
+                            
+                            # Create new asset record
+                            asset_data = {
+                                'content_hash': content_hash,
+                                'storage_path': storage_path,
+                                'storage_type': storage.backend_type,
+                                'file_size': img_metadata['file_size'],
+                                'content_type': img_metadata['content_type'],
+                                'width': img_metadata.get('width'),
+                                'height': img_metadata.get('height')
+                            }
+                            
+                            success = self._create_image_asset(asset_data)
+                            if success:
+                                print(f"📥 Created new image asset: {content_hash[:8]}...")
+                                image_hash = content_hash
+                            else:
+                                print(f"❌ Failed to create asset for {content_hash[:8]}...")
+                        else:
+                            # Update access tracking for existing asset
+                            self._update_image_access(content_hash)
+                            print(f"♻️  Image asset exists (deduplicated): {content_hash[:8]}...")
+                            image_hash = content_hash
+                        
+                    except Exception as e:
+                        print(f"⚠️  Failed to process image {png_file}: {e}")
+                        image_hash = None
+                
                 # Process each license found
                 licenses = search_result.get('licenses', [])
                 
@@ -262,7 +308,8 @@ class APIImporter:
                         'expiration_date': None,
                         'result_status': result_status,
                         'meta': json.dumps(metadata),
-                        'raw': json.dumps(data)
+                        'raw': json.dumps(data),
+                        'image_hash': image_hash  # Include image_hash from the start
                     })
                 else:
                     # Process each license
@@ -290,46 +337,36 @@ class APIImporter:
                             'expiration_date': expiration_date,
                             'result_status': search_result.get('result_status', 'found'),
                             'meta': json.dumps(metadata),
-                            'raw': json.dumps(data)
+                            'raw': json.dumps(data),
+                            'image_hash': image_hash  # Include image_hash from the start
                         })
-                
-                # Handle corresponding PNG file - remove "_parse" from filename
-                png_filename = json_file.stem.replace('_parse', '') + '.png'
-                png_file = json_file.parent / png_filename
-                if png_file.exists():
-                    # For now, just record the image path - actual file handling depends on storage strategy
-                    image_records.append({
-                        'dataset_id': dataset_id,
-                        'state': search_state,
-                        'search_name': pharmacy_name,
-                        'organized_path': str(png_file.relative_to(states_dir)),
-                        'storage_type': 'local',
-                        'file_size': png_file.stat().st_size
-                    })
                 
             except Exception as e:
                 print(f"⚠️  Failed to process {json_file}: {e}")
                 continue
         
-        # Import search results in batches
+        # Import search results in batches (images already processed and included)
         if search_results:
             total_imported = 0
             for i in range(0, len(search_results), batch_size):
                 batch = search_results[i:i + batch_size]
                 
-                # Clean up None values
+                # Clean up None values (but keep image_hash if it's None)
                 cleaned_batch = []
                 for result in batch:
                     cleaned_result = {k: v for k, v in result.items() if v is not None and v != ''}
+                    # Always include image_hash field, even if None
+                    if 'image_hash' in result:
+                        cleaned_result['image_hash'] = result['image_hash']
                     cleaned_batch.append(cleaned_result)
                 
                 try:
                     response = self.session.post(f"{self.api_url}/search_results", json=cleaned_batch)
                     response.raise_for_status()
                     
-                    imported_count = len(response.json()) if response.json() else len(cleaned_batch)
+                    imported_count = len(response.json()) if response.json() else len(batch)
                     total_imported += imported_count
-                    print(f"📥 Imported batch {i//batch_size + 1}: {imported_count} search results")
+                    print(f"📥 Imported batch {i//batch_size + 1}: {imported_count} search results with images")
                     
                 except requests.exceptions.RequestException as e:
                     print(f"❌ Failed to import search results batch {i//batch_size + 1}: {e}")
@@ -337,32 +374,49 @@ class APIImporter:
                         print(f"Error details: {e.response.text}")
                     return False
             
-            print(f"✅ Successfully imported {total_imported} search results to {self.backend}")
-        
-        # Import image records in batches
-        if image_records:
-            total_images = 0
-            for i in range(0, len(image_records), batch_size):
-                batch = image_records[i:i + batch_size]
-                
-                try:
-                    response = self.session.post(f"{self.api_url}/images", json=batch)
-                    response.raise_for_status()
-                    
-                    imported_count = len(response.json()) if response.json() else len(batch)
-                    total_images += imported_count
-                    print(f"📥 Imported image batch {i//batch_size + 1}: {imported_count} image records")
-                    
-                except requests.exceptions.RequestException as e:
-                    print(f"❌ Failed to import image batch {i//batch_size + 1}: {e}")
-                    if hasattr(e, 'response') and e.response:
-                        print(f"Error details: {e.response.text}")
-                    # Don't fail the whole import if images fail
-                    print("⚠️  Continuing with search results import despite image errors")
-            
-            print(f"✅ Successfully imported {total_images} image records to {self.backend}")
+            print(f"✅ Successfully imported {total_imported} search results with images to {self.backend}")
         
         return True
+        
+        return True
+
+    def _check_image_asset_exists(self, content_hash: str) -> bool:
+        """Check if image asset already exists"""
+        try:
+            response = self.session.get(
+                f"{self.api_url}/image_assets",
+                params={'content_hash': f'eq.{content_hash}', 'select': 'content_hash'}
+            )
+            response.raise_for_status()
+            return len(response.json()) > 0
+        except Exception as e:
+            print(f"⚠️  Error checking asset existence: {e}")
+            return False
+
+    def _create_image_asset(self, asset_data: Dict) -> bool:
+        """Create new image asset record"""
+        try:
+            response = self.session.post(f"{self.api_url}/image_assets", json=asset_data)
+            response.raise_for_status()
+            return True
+        except Exception as e:
+            print(f"❌ Failed to create image asset: {e}")
+            return False
+
+    def _update_image_access(self, content_hash: str) -> bool:
+        """Update access tracking for existing image"""
+        try:
+            # For now, just do a simple increment - the exact syntax may vary by API
+            response = self.session.patch(
+                f"{self.api_url}/image_assets",
+                params={'content_hash': f'eq.{content_hash}'},
+                json={'last_accessed': datetime.now().isoformat()}
+            )
+            response.raise_for_status()
+            return True
+        except Exception as e:
+            print(f"⚠️  Failed to update access tracking: {e}")
+            return False
 
 
 def main():

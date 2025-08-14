@@ -589,7 +589,7 @@ print("✅ Statement prepared for execution")
                 # Test 1: Check all tables exist
                 expected_tables = [
                     'datasets', 'pharmacies', 'search_results', 
-                    'match_scores', 'validated_overrides', 'images', 'app_users'
+                    'match_scores', 'validated_overrides', 'image_assets', 'app_users'
                 ]
                 
                 cur.execute("""

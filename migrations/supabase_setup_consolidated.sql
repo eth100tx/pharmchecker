@@ -68,6 +68,7 @@ CREATE TABLE IF NOT EXISTS search_results (
   -- Metadata
   meta             JSONB,              -- Combined metadata from search and result
   raw              JSONB,              -- Raw result data
+  image_hash       CHAR(64),           -- SHA256 reference to image_assets
   created_at       TIMESTAMP NOT NULL DEFAULT now(),
   
   -- Unique constraint to handle deduplication during import
@@ -120,18 +121,18 @@ CREATE TABLE IF NOT EXISTS validated_overrides (
   CONSTRAINT unique_validated_override UNIQUE (dataset_id, pharmacy_name, state_code, license_number)
 );
 
--- Screenshot/image storage metadata
-CREATE TABLE IF NOT EXISTS images (
-  id               SERIAL PRIMARY KEY,
-  dataset_id       INT NOT NULL REFERENCES datasets(id) ON DELETE CASCADE,
-  search_result_id INT REFERENCES search_results(id) ON DELETE CASCADE,
-  state            CHAR(2) NOT NULL,
-  search_name      TEXT NOT NULL,  -- Pharmacy name being searched
-  organized_path   TEXT NOT NULL,  -- "<states_tag>/<STATE>/<search_name_slug>.import_timestamp"
-  storage_type     TEXT NOT NULL CHECK (storage_type IN ('local','supabase')),
-  file_size        BIGINT,
-  created_at       TIMESTAMP NOT NULL DEFAULT now(),
-  UNIQUE(dataset_id, organized_path, search_result_id)
+-- SHA256-based image asset deduplication
+CREATE TABLE IF NOT EXISTS image_assets (
+  content_hash     CHAR(64) PRIMARY KEY,        -- SHA256 hex string
+  storage_path     TEXT NOT NULL,               -- Storage-specific path
+  storage_type     TEXT NOT NULL CHECK (storage_type IN ('local', 'supabase')),
+  file_size        BIGINT NOT NULL,
+  content_type     TEXT,                        -- 'image/png', 'image/jpeg'
+  width            INT,                         -- Image dimensions (optional metadata)
+  height           INT,
+  first_seen       TIMESTAMP NOT NULL DEFAULT now(),
+  last_accessed    TIMESTAMP DEFAULT now(),
+  access_count     INT DEFAULT 1
 );
 
 -- User allowlist with session storage
@@ -249,12 +250,12 @@ all_results AS (
     ms.score_street,
     ms.score_city_state_zip,
     CASE 
-      WHEN img.organized_path IS NOT NULL 
-      THEN 'image_cache/' || img.organized_path 
+      WHEN ia.storage_path IS NOT NULL 
+      THEN ia.storage_path 
       ELSE NULL 
     END AS screenshot_path,
-    img.storage_type AS screenshot_storage_type,
-    img.file_size AS screenshot_file_size
+    ia.storage_type AS screenshot_storage_type,
+    ia.file_size AS screenshot_file_size
   FROM pharmacy_state_pairs psp
   LEFT JOIN search_results sr 
     ON sr.search_name = psp.pharmacy_name
@@ -265,8 +266,8 @@ all_results AS (
     AND ms.pharmacy_id = psp.pharmacy_id
     AND ms.states_dataset_id = psp.states_id
     AND ms.pharmacies_dataset_id = psp.pharmacies_id
-  LEFT JOIN images img
-    ON img.search_result_id = sr.id
+  LEFT JOIN image_assets ia
+    ON ia.content_hash = sr.image_hash
 ),
 with_overrides AS (
   -- Add validated overrides
@@ -452,10 +453,10 @@ CREATE INDEX IF NOT EXISTS ix_validated_dataset ON validated_overrides(dataset_i
 CREATE INDEX IF NOT EXISTS ix_validated_lookup ON validated_overrides(pharmacy_name, state_code);
 CREATE INDEX IF NOT EXISTS ix_validated_license ON validated_overrides(state_code, license_number);
 
--- Images table indexes
-CREATE INDEX IF NOT EXISTS ix_images_dataset ON images(dataset_id, state);
-CREATE INDEX IF NOT EXISTS ix_images_search_name ON images(search_name, state);
-CREATE INDEX IF NOT EXISTS ix_images_result ON images(search_result_id);
+-- Image assets indexes  
+CREATE INDEX IF NOT EXISTS ix_search_results_image ON search_results(image_hash);
+CREATE INDEX IF NOT EXISTS ix_assets_storage ON image_assets(storage_type, storage_path);
+CREATE INDEX IF NOT EXISTS ix_assets_access ON image_assets(last_accessed);
 
 -- Additional performance indexes for common query patterns
 
@@ -475,7 +476,8 @@ CREATE INDEX IF NOT EXISTS ix_app_users_active ON app_users(is_active) WHERE is_
 INSERT INTO pharmchecker_migrations (version, name) VALUES
   ('20240101000000_initial_schema', '20240101000000 Initial Schema'),
   ('20240101000001_comprehensive_functions', '20240101000001 Comprehensive Functions'),
-  ('20240101000002_indexes_and_performance', '20240101000002 Indexes And Performance')
+  ('20240101000002_indexes_and_performance', '20240101000002 Indexes And Performance'),
+  ('20240814000000_image_sha256_clean', '20240814000000 Clean SHA256 Image System')
 ON CONFLICT (version) DO NOTHING;
 
 -- =============================================================================

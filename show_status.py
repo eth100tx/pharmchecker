@@ -55,9 +55,9 @@ def show_status():
         search_count = cur.fetchone()[0]
         print(f"  Unique Searches: {search_count}")
         
-        cur.execute('SELECT COUNT(*) FROM images')
+        cur.execute('SELECT COUNT(*) FROM image_assets')
         image_count = cur.fetchone()[0]
-        print(f"  Screenshots: {image_count}")
+        print(f"  Image Assets: {image_count}")
         
         # Show search breakdown if we have searches
         if search_count > 0:

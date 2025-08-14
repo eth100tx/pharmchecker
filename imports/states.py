@@ -9,6 +9,7 @@ from pathlib import Path
 from typing import Optional, Dict, Any, List
 from slugify import slugify
 from .base import BaseImporter
+from utils.image_storage import create_image_storage
 
 class StateImporter(BaseImporter):
     """Importer for state board search results"""
@@ -420,14 +421,14 @@ class StateImporter(BaseImporter):
                                         search_data: Dict[str, Any], screenshot_path: Path, 
                                         tag: str):
         """
-        Store screenshot metadata linked to specific search result with image caching
+        Store screenshot with SHA256-based deduplication linked to search result
         
         Args:
             dataset_id: Dataset ID
             result_id: Search result ID to link to
             search_data: Search data containing screenshot info
             screenshot_path: Directory containing screenshots
-            tag: Dataset tag for organizing paths
+            tag: Dataset tag (unused in new system, kept for compatibility)
         """
         try:
             screenshot_filename = search_data['screenshot']
@@ -438,66 +439,53 @@ class StateImporter(BaseImporter):
                 self.logger.warning(f"Screenshot file not found: {screenshot_file}")
                 return
             
-            # Generate organized cache path with timestamp
-            search_name_slug = slugify(search_data['name'])
-            timestamp = search_data.get('timestamp', datetime.now())
+            # Create image storage handler
+            storage = create_image_storage(self.backend)
             
-            # Format timestamp for filename (down to minute precision)
-            if isinstance(timestamp, str):
-                try:
-                    timestamp = datetime.fromisoformat(timestamp.replace('Z', '+00:00'))
-                except ValueError:
-                    timestamp = datetime.now()
-                    
-            timestamp_str = timestamp.strftime('%Y%m%d_%H%M')
+            # Store image and get hash, path, and metadata
+            content_hash, storage_path, metadata = storage.store_image(screenshot_file)
             
-            # Create organized path: tag/STATE/original_filename.timestamp.ext
-            original_stem = screenshot_file.stem  # filename without extension
-            original_ext = screenshot_file.suffix  # .png
-            cached_filename = f"{original_stem}.{timestamp_str}{original_ext}"
-            organized_path = f"{tag}/{search_data['state']}/{cached_filename}"
+            # Check if asset already exists in database
+            existing_asset = self.execute_query(
+                "SELECT content_hash FROM image_assets WHERE content_hash = %s",
+                (content_hash,)
+            )
             
-            # Copy to image cache directory
-            cache_dir = Path('image_cache')
-            cache_file_path = cache_dir / organized_path
+            if not existing_asset:
+                # Create new asset record
+                self.execute_statement("""
+                    INSERT INTO image_assets (content_hash, storage_path, storage_type, 
+                                            file_size, content_type, width, height)
+                    VALUES (%s, %s, %s, %s, %s, %s, %s)
+                """, (
+                    content_hash,
+                    storage_path,
+                    storage.backend_type,
+                    metadata['file_size'],
+                    metadata['content_type'],
+                    metadata.get('width'),
+                    metadata.get('height')
+                ))
+                self.logger.info(f"Created new image asset: {content_hash[:8]}...")
+            else:
+                # Update access tracking
+                self.execute_statement("""
+                    UPDATE image_assets SET 
+                        last_accessed = now(),
+                        access_count = access_count + 1
+                    WHERE content_hash = %s
+                """, (content_hash,))
+                self.logger.info(f"Image asset already exists (deduplicated): {content_hash[:8]}...")
             
-            # Create directories if they don't exist
-            cache_file_path.parent.mkdir(parents=True, exist_ok=True)
-            
-            # Copy file to cache if not already there
-            if not cache_file_path.exists():
-                shutil.copy2(screenshot_file, cache_file_path)
-                self.logger.info(f"Copied screenshot to cache: {cache_file_path}")
-            
-            # Get file size from cached file
-            file_size = cache_file_path.stat().st_size
-            
-            # Store organized path (relative to image_cache) in database
-            # This allows the GUI to find images at image_cache/{organized_path}
-            
-            # Insert metadata with search_result_id link
+            # Link image to search result
             self.execute_statement("""
-                INSERT INTO images (dataset_id, search_result_id, state, search_name, 
-                                   organized_path, storage_type, file_size)
-                VALUES (%s, %s, %s, %s, %s, %s, %s)
-                ON CONFLICT (dataset_id, organized_path) DO UPDATE SET
-                    search_result_id = EXCLUDED.search_result_id,
-                    search_name = EXCLUDED.search_name,
-                    file_size = EXCLUDED.file_size
-            """, (
-                dataset_id,
-                result_id,
-                search_data['state'],
-                search_data['name'],
-                organized_path,
-                'local',  # TODO: Support 'supabase' storage type
-                file_size
-            ))
+                UPDATE search_results SET image_hash = %s WHERE id = %s
+            """, (content_hash, result_id))
             
-            self.logger.info(f"Screenshot cached and linked: {organized_path} -> result_id {result_id}")
+            self.logger.info(f"Image linked: {content_hash[:8]}... -> result_id {result_id}")
             
         except Exception as e:
-            self.logger.error(f"Failed to store screenshot metadata: {str(e)}")
+            self.logger.error(f"Failed to store screenshot with SHA256: {str(e)}")
     
     def _store_screenshot_metadata(self, dataset_id: int, search_id: int, 
                                  search_data: Dict[str, Any], screenshot_path: Path,

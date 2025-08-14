@@ -12,12 +12,78 @@ from datetime import datetime
 import os
 import sys
 import logging
+from dotenv import load_dotenv
 
 # Initialize logger
 logger = logging.getLogger(__name__)
 
 # Add project root to path for imports
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+
+def get_image_display_url(storage_path: str, storage_type: str) -> Optional[str]:
+    """
+    Convert SHA256 storage path to displayable URL
+    
+    Args:
+        storage_path: Path from image_assets table (e.g., 'sha256/ab/cd/hash.png')
+        storage_type: 'local' or 'supabase'
+        
+    Returns:
+        URL that Streamlit can display, or None if not available
+    """
+    if not storage_path:
+        return None
+        
+    if storage_type == 'local':
+        # For local files, prepend the image cache directory
+        full_path = os.path.join('image_cache', storage_path)
+        if os.path.exists(full_path):
+            return full_path
+        else:
+            logger.warning(f"Local image not found: {full_path}")
+            return None
+            
+    elif storage_type == 'supabase':
+        # For Supabase, create signed URL
+        try:
+            load_dotenv()
+            supabase_url = os.getenv('SUPABASE_URL')
+            service_key = os.getenv('SUPABASE_SERVICE_KEY')
+            
+            if not supabase_url or not service_key:
+                logger.error("Supabase credentials not available for image display")
+                return None
+                
+            # Try to create signed URL using Supabase client
+            try:
+                from supabase import create_client
+                supabase = create_client(supabase_url, service_key)
+                
+                # Generate signed URL (valid for 1 hour)
+                signed_url_response = supabase.storage.from_('image_cache').create_signed_url(
+                    storage_path, expires_in=3600
+                )
+                
+                if 'signedURL' in signed_url_response:
+                    return signed_url_response['signedURL']
+                else:
+                    logger.error(f"Failed to create signed URL for {storage_path}")
+                    return None
+                    
+            except ImportError:
+                logger.error("Supabase client not available for image display")
+                return None
+            except Exception as e:
+                logger.error(f"Error creating signed URL for {storage_path}: {e}")
+                return None
+                
+        except Exception as e:
+            logger.error(f"Error handling Supabase image URL: {e}")
+            return None
+    
+    else:
+        logger.warning(f"Unknown storage type: {storage_type}")
+        return None
 from imports.validated import ValidatedImporter
 from config import get_db_config
 
@@ -281,16 +347,22 @@ def display_search_result_card(result_data: Dict[str, Any]) -> None:
         
         with col2:
             # Display screenshot if available
-            if result_data.get('screenshot_path'):
+            screenshot_url = get_image_display_url(
+                result_data.get('screenshot_path'), 
+                result_data.get('screenshot_storage_type')
+            )
+            if screenshot_url:
                 try:
                     # Display thumbnail
-                    st.image(result_data['screenshot_path'], caption="Search Screenshot", width=200)
+                    st.image(screenshot_url, caption="Search Screenshot", width=200)
                     
                     # Add expandable full-size view
                     with st.expander("🔍 View Full Size"):
-                        st.image(result_data['screenshot_path'], caption="Full Size Search Screenshot", use_container_width=True)
+                        st.image(screenshot_url, caption="Full Size Search Screenshot", use_container_width=True)
                 except Exception as e:
                     st.info("Screenshot not available")
+            else:
+                st.info("Screenshot not available")
 
 def create_export_button(df: pd.DataFrame, filename_prefix: str = "pharmchecker_export") -> None:
     """Create CSV export button for DataFrame"""
@@ -830,11 +902,17 @@ def display_enhanced_search_result_detail(result: pd.Series, pharmacy_info: Dict
             st.markdown(f"**Phone:** :blue[{pharmacy_info['phone']}]")
         
         # Show small thumbnail if available
-        if result.get('screenshot_path'):
+        screenshot_url = get_image_display_url(
+            result.get('screenshot_path'),
+            result.get('screenshot_storage_type')
+        )
+        if screenshot_url:
             try:
-                st.image(result['screenshot_path'], caption="Screenshot", width=150)
+                st.image(screenshot_url, caption="Screenshot", width=150)
             except Exception as e:
                 st.info("Screenshot not available")
+        else:
+            st.info("Screenshot not available")
     
     with col3:
         # Validation controls in the detailed view
@@ -855,11 +933,15 @@ def display_enhanced_search_result_detail(result: pd.Series, pharmacy_info: Dict
                 st.write(f"Result ID: {result['result_id']}")
     
     # Full-size screenshot at bottom for side-by-side comparison
-    if result.get('screenshot_path'):
+    screenshot_url = get_image_display_url(
+        result.get('screenshot_path'),
+        result.get('screenshot_storage_type')
+    )
+    if screenshot_url:
         with st.expander("📷 View Full Size Screenshot (for comparison with data above)", expanded=False):
             st.markdown("**Use this to verify the search result data matches the screenshot:**")
             try:
-                st.image(result['screenshot_path'], caption="Full Size Search Screenshot", use_container_width=True)
+                st.image(screenshot_url, caption="Full Size Search Screenshot", use_container_width=True)
             except Exception as e:
                 st.error(f"Could not load screenshot: {e}")
 

@@ -34,7 +34,7 @@ def clean_search_data():
             cur.execute("SELECT COUNT(*) FROM search_results")
             results_count = cur.fetchone()[0]
             
-            cur.execute("SELECT COUNT(*) FROM images")
+            cur.execute("SELECT COUNT(*) FROM image_assets")
             images_count = cur.fetchone()[0]
             
             cur.execute("SELECT COUNT(*) FROM datasets WHERE kind = 'states'")
@@ -45,7 +45,7 @@ def clean_search_data():
             
             print(f"Before cleaning:")
             print(f"  - Search results: {results_count} (merged table)")
-            print(f"  - Images: {images_count}")
+            print(f"  - Image assets: {images_count}")
             print(f"  - State datasets: {state_datasets_count}")
             print(f"  - Pharmacies: {pharmacy_count} (will be preserved)")
             
@@ -66,10 +66,10 @@ def clean_search_data():
             deleted_overrides = cur.rowcount
             print(f"  - Deleted {deleted_overrides} validated overrides")
             
-            # Delete images (may reference search_results)
-            cur.execute("DELETE FROM images")
+            # Delete image assets (may reference search_results)
+            cur.execute("DELETE FROM image_assets")
             deleted_images = cur.rowcount
-            print(f"  - Deleted {deleted_images} image records")
+            print(f"  - Deleted {deleted_images} image asset records")
             
             # Delete search results from merged table
             cur.execute("DELETE FROM search_results")

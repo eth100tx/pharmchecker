@@ -100,12 +100,12 @@ all_results AS (
     ms.score_street,
     ms.score_city_state_zip,
     CASE 
-      WHEN img.organized_path IS NOT NULL 
-      THEN 'image_cache/' || img.organized_path 
+      WHEN ia.storage_path IS NOT NULL 
+      THEN ia.storage_path 
       ELSE NULL 
     END AS screenshot_path,
-    img.storage_type AS screenshot_storage_type,
-    img.file_size AS screenshot_file_size
+    ia.storage_type AS screenshot_storage_type,
+    ia.file_size AS screenshot_file_size
   FROM pharmacy_state_pairs psp
   LEFT JOIN search_results sr 
     ON sr.search_name = psp.pharmacy_name
@@ -116,8 +116,8 @@ all_results AS (
     AND ms.pharmacy_id = psp.pharmacy_id
     AND ms.states_dataset_id = psp.states_id
     AND ms.pharmacies_dataset_id = psp.pharmacies_id
-  LEFT JOIN images img
-    ON img.search_result_id = sr.id
+  LEFT JOIN image_assets ia
+    ON ia.content_hash = sr.image_hash
 ),
 with_overrides AS (
   -- Add validated overrides

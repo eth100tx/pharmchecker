@@ -6,7 +6,8 @@ A pharmacy license verification system that imports search results from state bo
 
 PharmChecker streamlines pharmacy license verification across multiple U.S. states by:
 
-- **Importing** pharmacy data (CSV) and state board search results (JSON)
+- **Importing** pharmacy data (CSV) and state board search results (JSON) with screenshots
+- **Deduplicating** images using SHA256 content hashing for efficient storage
 - **Scoring** addresses automatically using fuzzy matching algorithms  
 - **Reviewing** results through an interactive Streamlit web dashboard
 - **Validating** findings manually with audit trail support
@@ -18,11 +19,12 @@ PharmChecker streamlines pharmacy license verification across multiple U.S. stat
 
 ```
 CSV/JSON Files → Import System → Database (PostgreSQL/Supabase) → Scoring Engine → Web Interface
-                                            ↓
-                                  Versioned Datasets + Screenshots + Validations
+                       ↓                      ↓
+                 SHA256 Image Storage   Versioned Datasets + Screenshots + Validations
 ```
 
 - **Dual database support** with PostgreSQL (local) or Supabase (cloud) via unified migration system
+- **SHA256 image deduplication** prevents storage of duplicate screenshots
 - **Lazy scoring system** computes address matches only when needed
 - **Multi-user support** with session management and authentication  
 - **Natural key linking** using pharmacy names/license numbers (not internal IDs)
@@ -157,7 +159,9 @@ pharmchecker/
 │   └── postgrest/             # PostgREST API server
 ├── utils/                     # GUI utilities
 │   ├── database.py            # Database operations
-│   └── display.py             # UI components
+│   ├── display.py             # UI components
+│   ├── image_storage.py       # SHA256 image storage system
+│   └── api_database.py        # API database management
 ├── docs/                      # Comprehensive documentation
 └── data/                      # Sample data for testing
 ```
@@ -199,7 +203,7 @@ pharmchecker/
 - **Streamlit-based** dashboard with real-time updates
 - **Interactive filtering** by state, status, score ranges
 - **Detail views** with side-by-side address comparisons
-- **Screenshot integration** with automatic organization
+- **Screenshot integration** with SHA256 deduplication and automatic display
 - **Export functionality** with CSV downloads
 
 ### ✅ Validation System

@@ -1,8 +1,11 @@
 # PharmChecker Makefile
 # Convenient commands for development and testing
 
-# Backend configuration - set BACKEND=supabase to use Supabase, default is postgresql
-BACKEND ?= postgresql
+# Backend configuration - auto-detect from .env USE_CLOUD_DB setting
+# Can still be overridden with BACKEND=postgresql or BACKEND=supabase
+USE_CLOUD_DB := $(shell grep -E '^USE_CLOUD_DB=' .env 2>/dev/null | cut -d= -f2 | tr -d ' ')
+AUTO_BACKEND := $(if $(filter true,$(USE_CLOUD_DB)),supabase,postgresql)
+BACKEND ?= $(AUTO_BACKEND)
 PYTHON_BACKEND_ARG := $(if $(filter supabase,$(BACKEND)),--backend supabase,--backend postgresql)
 
 .PHONY: help clean_states import_test_states import_test_states2 clean_all setup status migrate backend_info
@@ -13,10 +16,10 @@ help:
 	@echo "================================="
 	@echo ""
 	@echo "Backend Configuration:"
-	@echo "  Current backend: $(BACKEND)"
+	@echo "  Current backend: $(BACKEND) (auto-detected from USE_CLOUD_DB=$(USE_CLOUD_DB))"
 	@echo "  backend_info       - Show current backend configuration"
-	@echo "  BACKEND=postgresql - Use local PostgreSQL (default)"
-	@echo "  BACKEND=supabase   - Use Supabase cloud database"
+	@echo "  BACKEND=postgresql - Override to use local PostgreSQL"
+	@echo "  BACKEND=supabase   - Override to use Supabase cloud database"
 	@echo ""
 	@echo "Database Management:"
 	@echo "  clean_states        - Remove all search data (preserves pharmacies)"
@@ -45,8 +48,10 @@ help:
 backend_info:
 	@echo "📡 Backend Configuration"
 	@echo "======================="
-	@echo "Active Backend: $(BACKEND)"
-	@echo "Python Args: $(PYTHON_BACKEND_ARG)"
+	@echo "USE_CLOUD_DB from .env: $(USE_CLOUD_DB)"
+	@echo "Auto-detected backend: $(AUTO_BACKEND)"
+	@echo "Active backend: $(BACKEND)"
+	@echo "Python args: $(PYTHON_BACKEND_ARG)"
 	@echo ""
 	@if [ "$(BACKEND)" = "supabase" ]; then \
 		echo "🌐 Supabase Configuration:"; \
