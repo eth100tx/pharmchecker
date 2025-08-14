@@ -349,23 +349,64 @@ def get_database_manager():
             ].copy()
         
         def aggregate_for_matrix(self, df):
-            # Client-side aggregation with proper record counting
+            # Client-side aggregation with proper record counting and best record selection
             if df.empty:
                 return df
             
-            # Group by pharmacy-state combination
-            grouped = df.groupby(['pharmacy_name', 'search_state'])
+            # Group by pharmacy-state combination and select best record for each
+            grouped_results = []
             
-            # Get the first record for most fields, but count actual records
-            result = grouped.first().reset_index()
+            for (pharmacy_name, state), group in df.groupby(['pharmacy_name', 'search_state']):
+                # PRIORITY ORDER: Validated > Best Score > First Record
+                validated_row = None
+                
+                # Import here to avoid circular imports
+                try:
+                    from utils.validation_local import is_validated_simple
+                    
+                    # 1. Look for validated record first (HIGHEST PRIORITY)
+                    for idx, row in group.iterrows():
+                        if is_validated_simple(row):
+                            validated_row = row
+                            break  # Found validated record - use this one
+                except ImportError:
+                    # If validation module not available, skip validation check
+                    pass
+                
+                # 2. Fall back to best score or first record
+                if validated_row is not None:
+                    best_row = validated_row
+                else:
+                    # Get best score or first record
+                    if 'score_overall' in group.columns:
+                        # Filter to records that actually have scores (not NaN)
+                        records_with_scores = group[group['score_overall'].notna()]
+                        if not records_with_scores.empty:
+                            # Pick the record with the highest score
+                            best_row = records_with_scores.loc[records_with_scores['score_overall'].idxmax()]
+                        else:
+                            # No scores available, fall back to first record
+                            best_row = group.iloc[0]
+                    else:
+                        best_row = group.iloc[0]
+                
+                # Add record count - count non-null result_ids in the group
+                record_count = group['result_id'].notna().sum()
+                # For combinations with no search results, set count to 1 (the pharmacy record itself)
+                record_count = max(1, record_count)
+                
+                # Create result row with record count
+                result_row = best_row.copy()
+                result_row['record_count'] = record_count
+                grouped_results.append(result_row)
             
-            # Add proper record count - count non-null result_ids
-            result['record_count'] = grouped['result_id'].apply(lambda x: x.notna().sum()).values
-            
-            # For combinations with no search results, set count to 1 (the pharmacy record itself)
-            result['record_count'] = result['record_count'].apply(lambda x: max(1, x))
-            
-            return result
+            # Convert back to DataFrame
+            if grouped_results:
+                import pandas as pd
+                result = pd.DataFrame(grouped_results)
+                return result
+            else:
+                return df
     
     return MockDB()
 

@@ -438,8 +438,14 @@ def display_dense_results_table(df: pd.DataFrame, debug_mode: bool) -> Optional[
         else:
             # Get best score or first record
             if 'score_overall' in group.columns:
-                scores_filled = group['score_overall'].fillna(-1)
-                best_row = group.loc[scores_filled.idxmax()]
+                # Filter to records that actually have scores (not NaN)
+                records_with_scores = group[group['score_overall'].notna()]
+                if not records_with_scores.empty:
+                    # Pick the record with the highest score
+                    best_row = records_with_scores.loc[records_with_scores['score_overall'].idxmax()]
+                else:
+                    # No scores available, fall back to first record
+                    best_row = group.iloc[0]
             else:
                 best_row = group.iloc[0]
         
