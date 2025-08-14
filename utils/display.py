@@ -467,12 +467,15 @@ def display_dense_results_table(df: pd.DataFrame, debug_mode: bool) -> Optional[
             'Pharmacy': row['pharmacy_name'],
             'State': row['search_state'],
             'License #': row['license_display'],
+            'License Status': row.get('license_status', 'N/A'),
+            'License Type': row.get('license_type', 'N/A'),
             'Records': row['result_count'],
             'Status': format_status_badge(row.get('status_bucket', 'no data')),
             'Score': f"{row['score_overall']:.1f}%" if pd.notna(row.get('score_overall')) else ""
         }
         
         if debug_mode:
+            display_row['Result Status'] = row.get('result_status', 'N/A')
             display_row['IDs'] = f"P:{row.get('pharmacy_id', 'N/A')} R:{row.get('result_id', 'N/A')}"
         
         display_data.append(display_row)
