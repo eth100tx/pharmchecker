@@ -46,12 +46,20 @@ def get_image_display_url(storage_path: str, storage_type: str) -> Optional[str]
     elif storage_type == 'supabase':
         # For Supabase, create signed URL
         try:
-            load_dotenv()
-            supabase_url = os.getenv('SUPABASE_URL')
-            service_key = os.getenv('SUPABASE_SERVICE_KEY')
+            # Try Streamlit secrets first, then fall back to environment variables
+            try:
+                supabase_url = st.secrets.get('SUPABASE_URL') or os.getenv('SUPABASE_URL')
+                service_key = st.secrets.get('SUPABASE_SERVICE_KEY') or os.getenv('SUPABASE_SERVICE_KEY')
+            except Exception:
+                # Fallback to environment variables if secrets not available
+                load_dotenv()
+                supabase_url = os.getenv('SUPABASE_URL')
+                service_key = os.getenv('SUPABASE_SERVICE_KEY')
             
             if not supabase_url or not service_key:
                 logger.error("Supabase credentials not available for image display")
+                logger.error(f"SUPABASE_URL: {'✓' if supabase_url else '✗'}")
+                logger.error(f"SUPABASE_SERVICE_KEY: {'✓' if service_key else '✗'}")
                 return None
                 
             # Try to create signed URL using Supabase client
@@ -70,8 +78,9 @@ def get_image_display_url(storage_path: str, storage_type: str) -> Optional[str]
                     logger.error(f"Failed to create signed URL for {storage_path}")
                     return None
                     
-            except ImportError:
-                logger.error("Supabase client not available for image display")
+            except ImportError as e:
+                logger.error(f"Supabase client not available for image display: {e}")
+                logger.error("Make sure 'supabase>=2.0.0' is in requirements.txt")
                 return None
             except Exception as e:
                 logger.error(f"Error creating signed URL for {storage_path}: {e}")
