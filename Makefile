@@ -80,6 +80,20 @@ import_test_states:
 		--description "states_baseline test data" \
 		--batch-size 1
 
+# Import states_baseline data
+import_scrape_states:
+	@echo "📥 Importing states_baseline to $(BACKEND)..."
+	@python3 imports/resilient_importer.py \
+		--states-dir /home/eric/ai/pharmchecker/data/2025-08-04 \
+		--tag Aug-04-scrape \
+		--backend $(BACKEND) \
+		--created-by makefile_user \
+		--description "small scrape FL MI NY PA" \
+		--max-workers 16 \
+		--max-uploads 10 \
+		--debug-log \
+		--batch-size 25
+
 # Import states_baseline2 data  
 import_test_states2:
 	@echo "📥 Importing states_baseline2 to $(BACKEND)..."
@@ -105,6 +119,15 @@ import_pharmacies:
 		--description "Converted pharmacy test data" \
 		--batch-size 1
 
+import_pharmacy_rows:
+	@echo "📥 Importing pharmacy data to $(BACKEND)..."
+	@python3 -m imports.api_importer pharmacies \
+		temp/pharmacies.csv \
+		pharmacy_rows \
+		--backend $(BACKEND) \
+		--created-by makefile_user \
+		--description "Converted pharmacy test data" \
+		--batch-size 1
 # Database status
 status:
 	@echo "📊 Database Status ($(BACKEND))"

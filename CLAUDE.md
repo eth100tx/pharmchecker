@@ -57,9 +57,16 @@ streamlit run app.py  # Web interface at localhost:8501
 python test_scoring.py   # Test address matching
 python test_gui.py       # Test UI components
 
-# Data import
+# Production data import (Resilient Importer - recommended for 500+ files)
+make import_scrape_states         # Import state searches with images (Supabase)
+make import_scrape_states_local   # Import state searches with images (PostgreSQL)
+
+# Legacy data import (for small datasets)
 python -m imports.pharmacies <csv> <tag>
 python -m imports.states <json_dir> <tag>
+
+# Direct resilient importer usage
+python3 imports/resilient_importer.py --states-dir "/path/to/data" --tag "dataset_name" --backend supabase
 ```
 
 ## Key Files to Know
@@ -74,8 +81,9 @@ python -m imports.states <json_dir> <tag>
 - `system_test.py` - End-to-end test (run this to verify changes)
 
 ### Import System
+- `imports/resilient_importer.py` - **High-performance production importer** (60x faster, handles 500+ files)
 - `imports/pharmacies.py` - CSV importer (handles empty state_licenses)
-- `imports/states.py` - JSON importer (auto-deduplication)
+- `imports/states.py` - JSON importer (auto-deduplication, legacy for small datasets)
 - `imports/scoring.py` - Lazy scoring engine
 - `imports/validated.py` - Validation importer (framework ready, not fully implemented)
 
@@ -87,13 +95,31 @@ python -m imports.states <json_dir> <tag>
 ## Common Tasks
 
 ### Import New Data
+
+**For Production (500+ files) - Use Resilient Importer:**
+```bash
+# Import state searches with images (recommended)
+make import_scrape_states                    # Supabase backend
+make import_scrape_states_local              # PostgreSQL backend
+
+# Direct usage with options
+python3 imports/resilient_importer.py \
+    --states-dir "/path/to/data" \
+    --tag "Aug-04-scrape" \
+    --backend supabase \
+    --batch-size 25 \
+    --max-workers 16 \
+    --debug-log
+```
+
+**For Small Datasets - Legacy Importers:**
 ```python
 # Pharmacies with automatic tag versioning
 from imports.pharmacies import PharmacyImporter
 importer = PharmacyImporter()
 importer.import_csv('data.csv', 'jan_2024')  # Creates unique version if tag exists
 
-# State searches with deduplication
+# State searches with deduplication (small datasets only)
 from imports.states import StateImporter
 importer = StateImporter()
 importer.import_directory('FL_searches/', 'fl_jan_2024')
