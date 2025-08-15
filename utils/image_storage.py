@@ -19,7 +19,7 @@ logger = logging.getLogger(__name__)
 class ImageStorage:
     """Manages image storage with SHA256-based deduplication."""
     
-    def __init__(self, backend_type: str = 'local', base_cache_dir: str = 'image_cache'):
+    def __init__(self, backend_type: str = 'local', base_cache_dir: str = 'imagecache'):
         """
         Initialize ImageStorage.
         
@@ -136,7 +136,7 @@ class ImageStorage:
         
         # Check if file already exists (deduplication)
         try:
-            existing = self.supabase_client.storage.from_('image_cache').list(
+            existing = self.supabase_client.storage.from_('imagecache').list(
                 path=storage_path
             )
             if existing:
@@ -149,7 +149,7 @@ class ImageStorage:
         try:
             with open(source_path, 'rb') as f:
                 content_type = self._get_content_type(source_path.suffix)
-                response = self.supabase_client.storage.from_('image_cache').upload(
+                response = self.supabase_client.storage.from_('imagecache').upload(
                     storage_path, f, file_options={'content-type': content_type}
                 )
             logger.info(f"Uploaded new image to Supabase: {content_hash[:8]}... -> {storage_path}")
@@ -256,7 +256,7 @@ class ImageStorage:
                     logger.info(f"Deleted local image: {content_hash[:8]}...")
                     return True
             elif storage_type == 'supabase' and self.supabase_client:
-                self.supabase_client.storage.from_('image_cache').remove([storage_path])
+                self.supabase_client.storage.from_('imagecache').remove([storage_path])
                 logger.info(f"Deleted Supabase image: {content_hash[:8]}...")
                 return True
         except Exception as e:
