@@ -576,8 +576,93 @@ def render_sidebar():
         st.sidebar.error("❌ Not authenticated")
 
 def render_dataset_manager():
-    """Load-based dataset management interface"""
-    st.header("Dataset Manager")
+    """Enhanced dataset management interface with full CRUD operations"""
+    st.header("📊 Dataset Manager")
+    
+    # 1. Dataset Selection and Load (Top Section)
+    st.subheader("🎯 Dataset Selection")
+    available_datasets = get_available_datasets()
+    current_selection = st.session_state.selected_datasets
+    
+    col1, col2, col3 = st.columns(3)
+    
+    with col1:
+        st.markdown("**Pharmacies**")
+        pharmacy_options = available_datasets.get('pharmacies', [])
+        pharmacy_default = current_selection.get('pharmacies', 'None')
+        if pharmacy_default not in ['None'] + pharmacy_options:
+            pharmacy_default = 'None'
+        selected_pharmacy_tag = st.selectbox(
+            "Select pharmacy dataset:",
+            ['None'] + pharmacy_options,
+            index=(['None'] + pharmacy_options).index(pharmacy_default),
+            key="top_pharmacy_select"
+        )
+        if selected_pharmacy_tag != 'None':
+            stats = get_dataset_stats('pharmacies', selected_pharmacy_tag)
+            st.info(f"📊 {stats['record_count']} records")
+    
+    with col2:
+        st.markdown("**States**")
+        states_options = available_datasets.get('states', [])
+        states_default = current_selection.get('states', 'None')
+        if states_default not in ['None'] + states_options:
+            states_default = 'None'
+        selected_states_tag = st.selectbox(
+            "Select states dataset:",
+            ['None'] + states_options,
+            index=(['None'] + states_options).index(states_default),
+            key="top_states_select"
+        )
+        if selected_states_tag != 'None':
+            stats = get_dataset_stats('states', selected_states_tag)
+            st.info(f"📊 {stats['record_count']} records")
+    
+    with col3:
+        st.markdown("**Validated**")
+        validated_options = available_datasets.get('validated', [])
+        validated_default = current_selection.get('validated') or 'None'
+        if validated_default not in ['None'] + validated_options:
+            validated_default = 'None'
+        selected_validated_tag = st.selectbox(
+            "Select validated dataset:",
+            ['None'] + validated_options,
+            index=(['None'] + validated_options).index(validated_default),
+            key="top_validated_select"
+        )
+        if selected_validated_tag != 'None':
+            stats = get_dataset_stats('validated', selected_validated_tag)
+            st.info(f"📊 {stats['record_count']} records")
+    
+    # Update session state with top selector values
+    new_selection = {
+        'pharmacies': selected_pharmacy_tag if selected_pharmacy_tag != 'None' else None,
+        'states': selected_states_tag if selected_states_tag != 'None' else None,
+        'validated': selected_validated_tag if selected_validated_tag != 'None' else None
+    }
+    
+    # Only update if changed to avoid infinite reruns
+    if new_selection != st.session_state.selected_datasets:
+        st.session_state.selected_datasets = new_selection
+        save_dataset_selection(new_selection)
+    
+    # Load Data functionality (in the top section)
+    load_enabled = (selected_pharmacy_tag != 'None' and selected_states_tag != 'None')
+    
+    col1, col2, col3 = st.columns([1, 2, 1])
+    with col2:
+        if st.button("🔄 Load Data", type="primary", disabled=not load_enabled, 
+                    help="Load selected datasets into memory for analysis"):
+            if load_enabled:
+                validated_tag = selected_validated_tag if selected_validated_tag != 'None' else None
+                success = load_dataset_combination(selected_pharmacy_tag, selected_states_tag, validated_tag)
+                
+                if success:
+                    st.session_state.validation_load_attempted = False
+                    st.session_state.current_page = 'Results Matrix'
+                    st.rerun()
+            else:
+                st.error("Please select both Pharmacies and States datasets")
     
     # Show current loaded data status
     if is_data_loaded():
@@ -599,176 +684,586 @@ def render_dataset_manager():
     
     st.markdown("---")
     
-    # Dataset selection for loading
-    st.subheader("Load Dataset Combination")
+    # 2. Dataset Management Section
+    st.subheader("🛠️ Dataset Management")
     
-    # Show session restoration info if available
-    current_selection = st.session_state.selected_datasets
-    has_saved_selection = any(v for v in current_selection.values())
+    # Simplified tabs for Export/Import/Manage
+    tab1, tab2, tab3 = st.tabs(["📤 Export CSV", "📥 Import CSV", "🔍 Manage"])
     
-    if has_saved_selection:
-        st.info(f"💾 **Restored from session:** Pharmacies: {current_selection['pharmacies'] or 'None'}, States: {current_selection['states'] or 'None'}, Validated: {current_selection['validated'] or 'None'}")
+    with tab1:
+        render_simple_export_csv()
     
-    # Get available datasets
+    with tab2:
+        render_simple_import_csv()
+    
+    with tab3:
+        render_api_poc_dataset_explorer()
+
+
+def render_simple_export_csv():
+    """Simple CSV export for all dataset types"""
+    st.markdown("**📤 Export Datasets to CSV**")
+    st.caption("Direct database dumps to CSV format")
+    
     available_datasets = get_available_datasets()
     
-    # Dataset selection
     col1, col2, col3 = st.columns(3)
     
     with col1:
-        st.markdown("**Pharmacies** (Required)")
+        st.markdown("**Export Pharmacies**")
         pharmacy_options = available_datasets.get('pharmacies', [])
-        # Set default to restored value if available
-        pharmacy_default = current_selection.get('pharmacies', 'None')
-        if pharmacy_default not in ['None'] + pharmacy_options:
-            pharmacy_default = 'None'
-        selected_pharmacy = st.selectbox(
-            "Select pharmacy dataset:",
-            ['None'] + pharmacy_options,
-            index=(['None'] + pharmacy_options).index(pharmacy_default),
-            key="load_pharmacy_select"
-        )
-        if selected_pharmacy != 'None':
-            stats = get_dataset_stats('pharmacies', selected_pharmacy)
-            st.info(f"📊 Records: {stats['record_count']}")
+        if pharmacy_options:
+            export_pharmacy = st.selectbox(
+                "Select dataset:",
+                ['Select...'] + pharmacy_options,
+                key="simple_export_pharmacy"
+            )
+            
+            if export_pharmacy != 'Select...':
+                stats = get_dataset_stats('pharmacies', export_pharmacy)
+                st.info(f"📊 {stats['record_count']} records")
+                
+                if st.button("💾 Export CSV", key="simple_export_pharmacy_btn"):
+                    try:
+                        client = get_client()
+                        datasets = client.get_datasets()
+                        dataset_id = None
+                        for d in datasets:
+                            if d.get('kind') == 'pharmacies' and d.get('tag') == export_pharmacy:
+                                dataset_id = d.get('id')
+                                break
+                        
+                        if dataset_id:
+                            data = client.get_pharmacies(dataset_id=dataset_id, limit=9999)
+                            if data:
+                                df = pd.DataFrame(data)
+                                
+                                # Export only the essential fields (exclude database internals)
+                                essential_cols = ['name', 'alias', 'address', 'suite', 'city', 'state', 'zip', 'state_licenses']
+                                export_cols = [col for col in essential_cols if col in df.columns]
+                                
+                                export_df = df[export_cols].copy()
+                                
+                                # Clean up complex fields that may cause import issues
+                                if 'state_licenses' in export_df.columns:
+                                    # Convert state_licenses to string format (avoid pandas array comparison issues)
+                                    cleaned_licenses = []
+                                    for idx, val in export_df['state_licenses'].items():
+                                        try:
+                                            # Check for None/NaN first (without using pd.isna on potentially array-like objects)
+                                            if val is None:
+                                                cleaned_licenses.append('[]')
+                                            elif isinstance(val, (list, tuple)):
+                                                cleaned_licenses.append(str(val))
+                                            elif val == '' or str(val).lower() == 'nan':
+                                                cleaned_licenses.append('[]')
+                                            else:
+                                                cleaned_licenses.append(str(val))
+                                        except Exception as e:
+                                            st.write(f"Debug: Error cleaning value {val}: {e}")
+                                            cleaned_licenses.append('[]')
+                                    export_df['state_licenses'] = cleaned_licenses
+                                    
+                                # Skip additional_info for now to avoid complex JSON issues
+                                # TODO: Properly serialize additional_info as valid JSON
+                                csv_data = export_df.to_csv(index=False)
+                                
+                                st.download_button(
+                                    "⬇️ Download CSV",
+                                    csv_data,
+                                    f"pharmacies_{export_pharmacy}.csv",
+                                    "text/csv"
+                                )
+                                st.success(f"✅ Ready to export {len(export_df)} records with {len(export_cols)} fields")
+                            else:
+                                st.error("No data found")
+                    except Exception as e:
+                        st.error(f"Export failed: {e}")
+        else:
+            st.warning("No pharmacy datasets")
     
     with col2:
-        st.markdown("**State Searches** (Required)")
+        st.markdown("**Export States**")
         states_options = available_datasets.get('states', [])
-        # Set default to restored value if available
-        states_default = current_selection.get('states', 'None')
-        if states_default not in ['None'] + states_options:
-            states_default = 'None'
-        selected_states = st.selectbox(
-            "Select states dataset:",
-            ['None'] + states_options,
-            index=(['None'] + states_options).index(states_default),
-            key="load_states_select"
-        )
-        if selected_states != 'None':
-            stats = get_dataset_stats('states', selected_states)
-            st.info(f"📊 Records: {stats['record_count']}")
+        if states_options:
+            export_states = st.selectbox(
+                "Select dataset:",
+                ['Select...'] + states_options,
+                key="simple_export_states"
+            )
+            
+            if export_states != 'Select...':
+                stats = get_dataset_stats('states', export_states)
+                st.info(f"📊 {stats['record_count']} records")
+                
+                if st.button("💾 Export CSV", key="simple_export_states_btn"):
+                    try:
+                        client = get_client()
+                        datasets = client.get_datasets()
+                        dataset_id = None
+                        for d in datasets:
+                            if d.get('kind') == 'states' and d.get('tag') == export_states:
+                                dataset_id = d.get('id')
+                                break
+                        
+                        if dataset_id:
+                            data = client.get_search_results(dataset_id=dataset_id, limit=9999)
+                            if data:
+                                df = pd.DataFrame(data)
+                                
+                                # Export only essential fields (exclude database internals)
+                                exclude_cols = ['id', 'dataset_id', 'created_at']
+                                export_cols = [col for col in df.columns if col not in exclude_cols]
+                                
+                                export_df = df[export_cols].copy()
+                                csv_data = export_df.to_csv(index=False)
+                                
+                                st.download_button(
+                                    "⬇️ Download CSV",
+                                    csv_data,
+                                    f"states_{export_states}.csv",
+                                    "text/csv"
+                                )
+                                st.success(f"✅ Ready to export {len(export_df)} records with {len(export_cols)} fields")
+                            else:
+                                st.error("No data found")
+                    except Exception as e:
+                        st.error(f"Export failed: {e}")
+        else:
+            st.warning("No states datasets")
     
     with col3:
-        st.markdown("**Validated Overrides** (Optional)")
+        st.markdown("**Export Validated**")
         validated_options = available_datasets.get('validated', [])
-        # Set default to restored value if available
-        validated_default = current_selection.get('validated') or 'None'
-        if validated_default not in ['None'] + validated_options:
-            validated_default = 'None'
-        selected_validated = st.selectbox(
-            "Select validated dataset:",
-            ['None'] + validated_options,
-            index=(['None'] + validated_options).index(validated_default),
-            key="load_validated_select"
-        )
-        if selected_validated != 'None':
-            stats = get_dataset_stats('validated', selected_validated)
-            st.info(f"📊 Records: {stats['record_count']}")
+        if validated_options:
+            export_validated = st.selectbox(
+                "Select dataset:",
+                ['Select...'] + validated_options,
+                key="simple_export_validated"
+            )
+            
+            if export_validated != 'Select...':
+                stats = get_dataset_stats('validated', export_validated)
+                st.info(f"📊 {stats['record_count']} records")
+                
+                if st.button("💾 Export CSV", key="simple_export_validated_btn"):
+                    try:
+                        client = get_client()
+                        datasets = client.get_datasets()
+                        dataset_id = None
+                        for d in datasets:
+                            if d.get('kind') == 'validated' and d.get('tag') == export_validated:
+                                dataset_id = d.get('id')
+                                break
+                        
+                        if dataset_id:
+                            data = client.get_table_data('validated_overrides', 
+                                                       filters={'dataset_id': f'eq.{dataset_id}'}, 
+                                                       limit=9999)
+                            if data:
+                                df = pd.DataFrame(data)
+                                
+                                # Export only essential fields (exclude database internals)
+                                exclude_cols = ['id', 'dataset_id', 'created_at']
+                                export_cols = [col for col in df.columns if col not in exclude_cols]
+                                
+                                export_df = df[export_cols].copy()
+                                csv_data = export_df.to_csv(index=False)
+                                
+                                st.download_button(
+                                    "⬇️ Download CSV",
+                                    csv_data,
+                                    f"validated_{export_validated}.csv",
+                                    "text/csv"
+                                )
+                                st.success(f"✅ Ready to export {len(export_df)} records with {len(export_cols)} fields")
+                            else:
+                                st.error("No data found")
+                    except Exception as e:
+                        st.error(f"Export failed: {e}")
+        else:
+            st.warning("No validated datasets")
+
+
+def render_simple_import_csv():
+    """Simple CSV import for all dataset types"""
+    st.markdown("**📥 Import Datasets from CSV**")
+    st.caption("Upload CSV files to create new datasets")
     
-    # Auto-load feature for restored sessions
-    auto_load_possible = (
-        has_saved_selection and 
-        not is_data_loaded() and 
-        selected_pharmacy != 'None' and 
-        selected_states != 'None'
-    )
+    col1, col2, col3 = st.columns(3)
     
-    if auto_load_possible:
-        st.info("🔄 **Auto-loading restored session data...**")
-        validated_tag = selected_validated if selected_validated != 'None' else None
-        success = load_dataset_combination(selected_pharmacy, selected_states, validated_tag)
+    with col1:
+        st.markdown("**Import Pharmacies**")
+        pharmacy_file = st.file_uploader("CSV file:", type=['csv'], key="simple_import_pharmacy_file")
+        pharmacy_tag = st.text_input("Dataset tag:", placeholder="e.g., jan_2024", key="simple_import_pharmacy_tag")
         
-        if success:
-            new_datasets = {
-                'pharmacies': selected_pharmacy,
-                'states': selected_states,
-                'validated': validated_tag
-            }
-            st.session_state.selected_datasets = new_datasets
-            save_dataset_selection(new_datasets)
-            st.session_state.validation_load_attempted = False
-            st.session_state.current_page = 'Results Matrix'
-            st.rerun()
-    
-    # Load button
-    st.markdown("---")
-    col1, col2, col3 = st.columns([1, 2, 1])
+        if pharmacy_file and pharmacy_tag:
+            if st.button("📥 Import", key="simple_import_pharmacy_btn"):
+                try:
+                    # Debug: File info
+                    st.write("**DEBUG: File Info**")
+                    st.write(f"- File name: {pharmacy_file.name}")
+                    st.write(f"- File size: {pharmacy_file.size} bytes")
+                    st.write(f"- Target tag: {pharmacy_tag}")
+                    
+                    # Read and validate CSV
+                    df = pd.read_csv(pharmacy_file)
+                    st.write(f"**DEBUG: CSV Data**")
+                    st.write(f"- Rows: {len(df)}")
+                    st.write(f"- Columns: {list(df.columns)}")
+                    st.write(f"- Sample data:")
+                    st.dataframe(df.head(3))
+                    
+                    # Check required columns
+                    required_cols = ['name', 'address', 'city', 'state', 'zip']
+                    missing_cols = [col for col in required_cols if col not in df.columns]
+                    if missing_cols:
+                        st.error(f"❌ Missing required columns: {missing_cols}")
+                        return
+                    
+                    # Use API importer via subprocess
+                    import tempfile, subprocess, os
+                    with tempfile.NamedTemporaryFile(mode='w', suffix='.csv', delete=False) as tmp:
+                        df.to_csv(tmp.name, index=False)
+                        tmp_path = tmp.name
+                    
+                    st.write(f"**DEBUG: Import Process**")
+                    st.write(f"- Temp file: {tmp_path}")
+                    
+                    client = get_client()
+                    backend = client.get_active_backend().lower()
+                    st.write(f"- Backend: {backend}")
+                    
+                    # Build command
+                    cmd = [
+                        'python', '-m', 'imports.api_importer', 
+                        'pharmacies', tmp_path, pharmacy_tag, '--backend', backend
+                    ]
+                    st.write(f"- Command: {' '.join(cmd)}")
+                    
+                    # Run import
+                    with st.spinner("Running import..."):
+                        result = subprocess.run(cmd, capture_output=True, text=True, cwd=os.getcwd())
+                    
+                    # Debug: Command results
+                    st.write(f"**DEBUG: Import Results**")
+                    st.write(f"- Return code: {result.returncode}")
+                    st.write(f"- STDOUT: {result.stdout}")
+                    st.write(f"- STDERR: {result.stderr}")
+                    
+                    # Clean up temp file
+                    os.unlink(tmp_path)
+                    
+                    if result.returncode == 0:
+                        st.success(f"✅ Imported {len(df)} records as '{pharmacy_tag}'")
+                        st.rerun()
+                    else:
+                        st.error(f"❌ Import failed with code {result.returncode}")
+                        st.error(f"Error details: {result.stderr}")
+                        if result.stdout:
+                            st.info(f"Output: {result.stdout}")
+                            
+                except Exception as e:
+                    st.error(f"❌ Import failed with exception: {e}")
+                    import traceback
+                    st.code(traceback.format_exc())
     
     with col2:
-        load_enabled = (selected_pharmacy != 'None' and selected_states != 'None')
+        st.markdown("**Import States**")
+        states_file = st.file_uploader("CSV file:", type=['csv'], key="simple_import_states_file")
+        states_tag = st.text_input("Dataset tag:", placeholder="e.g., jan_2024_fl", key="simple_import_states_tag")
         
-        if st.button("🔄 Load Data", type="primary", disabled=not load_enabled, 
-                    help="Load selected datasets into memory for analysis"):
-            if load_enabled:
-                validated_tag = selected_validated if selected_validated != 'None' else None
-                success = load_dataset_combination(selected_pharmacy, selected_states, validated_tag)
-                
-                if success:
-                    # Update legacy session state for compatibility
-                    new_datasets = {
-                        'pharmacies': selected_pharmacy,
-                        'states': selected_states,
-                        'validated': validated_tag
-                    }
-                    st.session_state.selected_datasets = new_datasets
+        if states_file and states_tag:
+            if st.button("📥 Import", key="simple_import_states_btn"):
+                try:
+                    # Debug: File info
+                    st.write("**DEBUG: File Info**")
+                    st.write(f"- File name: {states_file.name}")
+                    st.write(f"- File size: {states_file.size} bytes")
+                    st.write(f"- Target tag: {states_tag}")
                     
-                    # Save dataset selection for persistence
-                    save_dataset_selection(new_datasets)
+                    # Read and validate CSV
+                    df = pd.read_csv(states_file)
+                    st.write(f"**DEBUG: CSV Data**")
+                    st.write(f"- Rows: {len(df)}")
+                    st.write(f"- Columns: {list(df.columns)}")
+                    st.write(f"- Sample data:")
+                    st.dataframe(df.head(3))
                     
-                    # Reset validation load attempt flag for new data
-                    st.session_state.validation_load_attempted = False
-                    # Navigate to Results Matrix after successful loading
-                    st.session_state.current_page = 'Results Matrix'
-                    st.rerun()
-            else:
-                st.error("Please select both Pharmacies and States datasets")
+                    # Check required columns for states
+                    required_cols = ['search_name', 'search_state']
+                    missing_cols = [col for col in required_cols if col not in df.columns]
+                    if missing_cols:
+                        st.error(f"❌ Missing required columns: {missing_cols}")
+                        return
+                    
+                    # Use API importer via subprocess
+                    import tempfile, subprocess, os
+                    with tempfile.NamedTemporaryFile(mode='w', suffix='.csv', delete=False) as tmp:
+                        df.to_csv(tmp.name, index=False)
+                        tmp_path = tmp.name
+                    
+                    st.write(f"**DEBUG: Import Process**")
+                    st.write(f"- Temp file: {tmp_path}")
+                    
+                    client = get_client()
+                    backend = client.get_active_backend().lower()
+                    st.write(f"- Backend: {backend}")
+                    
+                    # Build command
+                    cmd = [
+                        'python', '-m', 'imports.api_importer', 
+                        'states', tmp_path, states_tag, '--backend', backend
+                    ]
+                    st.write(f"- Command: {' '.join(cmd)}")
+                    
+                    # Run import
+                    with st.spinner("Running import..."):
+                        result = subprocess.run(cmd, capture_output=True, text=True, cwd=os.getcwd())
+                    
+                    # Debug: Command results
+                    st.write(f"**DEBUG: Import Results**")
+                    st.write(f"- Return code: {result.returncode}")
+                    st.write(f"- STDOUT: {result.stdout}")
+                    st.write(f"- STDERR: {result.stderr}")
+                    
+                    # Clean up temp file
+                    os.unlink(tmp_path)
+                    
+                    if result.returncode == 0:
+                        st.success(f"✅ Imported {len(df)} records as '{states_tag}'")
+                        st.rerun()
+                    else:
+                        st.error(f"❌ Import failed with code {result.returncode}")
+                        st.error(f"Error details: {result.stderr}")
+                        if result.stdout:
+                            st.info(f"Output: {result.stdout}")
+                            
+                except Exception as e:
+                    st.error(f"❌ Import failed with exception: {e}")
+                    import traceback
+                    st.code(traceback.format_exc())
     
-    # Debug mode scoring controls
-    if st.session_state.get('debug_mode', False) and selected_pharmacy != 'None' and selected_states != 'None':
-        st.markdown("---")
-        st.markdown("**🔧 Debug: Scoring Controls**")
+    with col3:
+        st.markdown("**Import Validated**")
+        validated_file = st.file_uploader("CSV file:", type=['csv'], key="simple_import_validated_file")
+        validated_tag = st.text_input("Dataset tag:", placeholder="e.g., jan_2024_val", key="simple_import_validated_tag")
         
-        col1, col2, col3 = st.columns(3)
+        if validated_file and validated_tag:
+            if st.button("📥 Import", key="simple_import_validated_btn"):
+                try:
+                    df = pd.read_csv(validated_file)
+                    st.info(f"Found {len(df)} records")
+                    
+                    import tempfile, subprocess, os
+                    with tempfile.NamedTemporaryFile(mode='w', suffix='.csv', delete=False) as tmp:
+                        df.to_csv(tmp.name, index=False)
+                        tmp_path = tmp.name
+                    
+                    client = get_client()
+                    backend = client.get_active_backend().lower()
+                    
+                    result = subprocess.run([
+                        'python', '-m', 'imports.api_importer', 
+                        'validated', tmp_path, validated_tag, '--backend', backend
+                    ], capture_output=True, text=True)
+                    
+                    os.unlink(tmp_path)
+                    
+                    if result.returncode == 0:
+                        st.success(f"✅ Imported {len(df)} records as '{validated_tag}'")
+                        st.rerun()
+                    else:
+                        st.error(f"Import failed: {result.stderr}")
+                except Exception as e:
+                    st.error(f"Import failed: {e}")
+
+
+def render_api_poc_dataset_explorer():
+    """Dataset Explorer from API POC - Browse and preview datasets"""
+    st.subheader("🔍 Dataset Explorer & Management")
+    st.caption("Browse datasets and preview data")
+    
+    try:
+        client = get_client()
+        
+        # Get all datasets
+        datasets = client.get_datasets()
+        
+        if not datasets:
+            st.warning("No datasets found in the database.")
+            return
+        
+        df = pd.DataFrame(datasets)
+        
+        # Display datasets table
+        st.markdown("**Available Datasets**")
+        st.dataframe(df, use_container_width=True)
+        
+        # Dataset selector
+        st.markdown("---")
+        st.markdown("**Explore Dataset**")
+        col1, col2 = st.columns(2)
         
         with col1:
-            if st.button("📊 Check Scores", help="Check if scores exist for this dataset combination"):
-                try:
-                    client = get_client()
-                    has_scores = client.has_scores(selected_states, selected_pharmacy)
-                    if has_scores:
-                        st.success(f"✅ Scores exist for {selected_pharmacy} + {selected_states}")
-                    else:
-                        st.warning(f"⚠️ No scores found for {selected_pharmacy} + {selected_states}")
-                except Exception as e:
-                    st.error(f"Error checking scores: {e}")
+            dataset_options = [f"{row['tag']} ({row['kind']})" for _, row in df.iterrows()]
+            selected_dataset = st.selectbox("Select Dataset", dataset_options, key="explore_dataset_select")
         
         with col2:
-            if st.button("🔄 Compute Scores", help="Force compute scores for this dataset combination"):
-                try:
-                    client = get_client()
-                    with st.spinner("Computing scores..."):
-                        result = client.trigger_scoring(selected_states, selected_pharmacy)
-                        if 'error' in result:
-                            st.error(f"Scoring failed: {result['error']}")
-                        else:
-                            st.success(f"✅ Computed {result.get('scores_computed', 0)} scores")
-                except Exception as e:
-                    st.error(f"Error computing scores: {e}")
+            preview_limit = st.number_input("Preview Limit", min_value=10, max_value=1000, value=50, key="explore_preview_limit")
         
-        with col3:
-            if st.button("🗑️ Clear Scores", help="Clear existing scores (for testing new plugin versions)"):
-                try:
-                    client = get_client()
-                    with st.spinner("Clearing scores..."):
-                        result = client.clear_scores(selected_states, selected_pharmacy)
-                        if 'error' in result:
-                            st.error(f"Clear failed: {result['error']}")
-                        else:
-                            st.success("✅ Scores cleared successfully")
-                except Exception as e:
-                    st.error(f"Error clearing scores: {e}")
+        if selected_dataset:
+            # Parse selection
+            selected_row = df[df.apply(lambda x: f"{x['tag']} ({x['kind']})" == selected_dataset, axis=1)].iloc[0]
+            dataset_id = selected_row['id']
+            dataset_kind = selected_row['kind']
+            
+            st.subheader(f"Dataset Details: {selected_row['tag']}")
+            
+            # Get record count for this dataset
+            dataset_stats = get_dataset_stats(dataset_kind, selected_row['tag'])
+            record_count = dataset_stats.get('record_count', 0)
+            
+            # Show dataset metadata
+            metadata_cols = st.columns(4)
+            with metadata_cols[0]:
+                st.metric("Kind", dataset_kind)
+            with metadata_cols[1]:
+                st.metric("Records", record_count)
+            with metadata_cols[2]:
+                st.metric("Created By", selected_row.get('created_by', 'Unknown'))
+            with metadata_cols[3]:
+                st.metric("Created", pd.to_datetime(selected_row['created_at']).strftime('%Y-%m-%d'))
+            
+            if selected_row.get('description'):
+                st.info(f"**Description:** {selected_row['description']}")
+            
+            # Show data preview based on kind
+            if dataset_kind == 'pharmacies':
+                st.subheader("Pharmacy Data Preview")
+                pharmacies = client.get_pharmacies(dataset_id=dataset_id, limit=preview_limit)
+                if pharmacies:
+                    pharmacy_df = pd.DataFrame(pharmacies)
+                    st.dataframe(pharmacy_df, use_container_width=True)
+                    st.caption(f"Showing {len(pharmacies)} records")
+                    
+                    # Export options
+                    csv_data = pharmacy_df.to_csv(index=False)
+                    st.download_button(
+                        label="⬇️ Export Pharmacies CSV",
+                        data=csv_data,
+                        file_name=f"pharmacies_{selected_row['tag']}_{datetime.now().strftime('%Y%m%d_%H%M%S')}.csv",
+                        mime="text/csv",
+                        key="export_explore_pharmacies"
+                    )
+                else:
+                    st.warning("No pharmacy data found for this dataset.")
+            
+            elif dataset_kind == 'states':
+                st.subheader("Search Results Preview")
+                results = client.get_search_results(dataset_id=dataset_id, limit=preview_limit)
+                if results:
+                    results_df = pd.DataFrame(results)
+                    st.dataframe(results_df, use_container_width=True)
+                    st.caption(f"Showing {len(results)} records")
+                    
+                    # Export options
+                    csv_data = results_df.to_csv(index=False)
+                    st.download_button(
+                        label="⬇️ Export States CSV",
+                        data=csv_data,
+                        file_name=f"states_{selected_row['tag']}_{datetime.now().strftime('%Y%m%d_%H%M%S')}.csv",
+                        mime="text/csv",
+                        key="export_explore_states"
+                    )
+                else:
+                    st.warning("No search results found for this dataset.")
+            
+            elif dataset_kind == 'validated':
+                st.subheader("Validated Overrides Preview")
+                data = client.get_table_data('validated_overrides', 
+                                           filters={'dataset_id': f'eq.{dataset_id}'}, 
+                                           limit=preview_limit)
+                if data:
+                    data_df = pd.DataFrame(data)
+                    st.dataframe(data_df, use_container_width=True)
+                    st.caption(f"Showing {len(data)} records")
+                    
+                    # Export options
+                    csv_data = data_df.to_csv(index=False)
+                    st.download_button(
+                        label="⬇️ Export Validated CSV",
+                        data=csv_data,
+                        file_name=f"validated_{selected_row['tag']}_{datetime.now().strftime('%Y%m%d_%H%M%S')}.csv",
+                        mime="text/csv",
+                        key="export_explore_validated"
+                    )
+                else:
+                    st.warning("No validated overrides found for this dataset.")
+            
+            # Dataset Management (Rename and Delete)
+            st.markdown("---")
+            st.subheader("Dataset Management")
+            st.warning("⚠️ **Use with caution!** These operations cannot be undone.")
+            
+            col1, col2 = st.columns(2)
+            
+            with col1:
+                st.write("**Rename Dataset**")
+                new_tag = st.text_input(
+                    "New Tag Name", 
+                    value=selected_row['tag'],
+                    help="Enter a new tag name for this dataset",
+                    key="explore_rename_input"
+                )
+                
+                if st.button(f"🏷️ Rename to '{new_tag}'", disabled=(new_tag == selected_row['tag'] or not new_tag), key="explore_rename_btn"):
+                    if st.session_state.get('explore_confirm_rename') != dataset_id:
+                        st.session_state.explore_confirm_rename = dataset_id
+                        st.warning("Click again to confirm rename operation")
+                    else:
+                        with st.spinner("Renaming dataset..."):
+                            try:
+                                # Use the update method from manage datasets
+                                update_data = {'tag': new_tag}
+                                result = client.update_table_record('datasets', dataset_id, update_data)
+                                
+                                if 'error' not in result:
+                                    st.success(f"✅ Renamed '{selected_row['tag']}' to '{new_tag}'")
+                                    st.session_state.explore_confirm_rename = None
+                                    st.rerun()
+                                else:
+                                    st.error(f"Rename failed: {result['error']}")
+                            except Exception as e:
+                                st.error(f"Rename failed: {e}")
+            
+            with col2:
+                st.write("**Delete Dataset**")
+                st.error("This will permanently delete ALL data associated with this dataset!")
+                
+                if st.button(f"🗑️ Delete '{selected_row['tag']}'", key="explore_delete_btn"):
+                    if st.session_state.get('explore_confirm_delete') != dataset_id:
+                        st.session_state.explore_confirm_delete = dataset_id
+                        st.error("⚠️ Click again to PERMANENTLY delete this dataset and ALL its data!")
+                    else:
+                        with st.spinner("Deleting dataset..."):
+                            try:
+                                # Use the delete method from manage datasets
+                                result = client.delete_table_record('datasets', dataset_id)
+                                
+                                if 'error' not in result:
+                                    st.success(f"✅ Deleted dataset '{selected_row['tag']}'")
+                                    st.info("📝 **Note:** Related data records may still exist. Use database cleanup if needed.")
+                                    st.session_state.explore_confirm_delete = None
+                                    st.rerun()
+                                else:
+                                    st.error(f"Delete failed: {result['error']}")
+                            except Exception as e:
+                                st.error(f"Delete failed: {e}")
     
+    except Exception as e:
+        st.error(f"Error loading datasets: {e}")
+
 
 def render_results_matrix():
     """Main results matrix view using loaded data"""
@@ -1037,7 +1532,6 @@ def render_results_matrix():
     create_export_button(filtered_data, "results_matrix")
 
 
-
 # Main application
 def main():
     """Main application entry point"""
@@ -1057,6 +1551,7 @@ def main():
     # Footer
     st.markdown("---")
     st.markdown("*PharmChecker MVP GUI - Built with Streamlit*")
+
 
 if __name__ == "__main__":
     main()
