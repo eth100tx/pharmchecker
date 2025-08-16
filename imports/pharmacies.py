@@ -11,16 +11,14 @@ from .base import BaseImporter
 class PharmacyImporter(BaseImporter):
     """Importer for pharmacy master records"""
     
-    def __init__(self, backend: str = None, db_adapter=None, conn_params=None):
+    def __init__(self, db_adapter=None):
         """
         Initialize pharmacy importer
         
         Args:
-            backend: Backend type ('postgresql' or 'supabase')
-            db_adapter: Database adapter instance
-            conn_params: Database connection parameters
+            db_adapter: Supabase adapter instance
         """
-        super().__init__(db_adapter=db_adapter, backend=backend, conn_params=conn_params)
+        super().__init__(db_adapter=db_adapter)
     
     def import_csv(self, filepath: str, tag: str, created_by: str = None,
                    description: str = None) -> bool:

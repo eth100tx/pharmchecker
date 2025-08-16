@@ -96,10 +96,6 @@ def show_status():
 
 def main():
     parser = argparse.ArgumentParser(description='Show PharmChecker database status')
-    parser.add_argument('--backend', choices=['supabase'], default='supabase',
-                       help='Database backend (only supabase supported)')
-    
-    args = parser.parse_args()
     show_status()
 
 if __name__ == "__main__":

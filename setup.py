@@ -1,95 +1,57 @@
 #!/usr/bin/env python3
 """
 PharmChecker Setup Script
-This script sets up the database infrastructure and verifies the installation.
-Supports both PostgreSQL (local) and Supabase (cloud) backends.
+This script sets up the Supabase database infrastructure and verifies the installation.
 """
 
 import os
 import sys
 import subprocess
 import logging
-import argparse
 from pathlib import Path
-from typing import Optional, List, Tuple
-import psycopg2
-from psycopg2 import sql
 from dotenv import load_dotenv
 
-# Try to import supabase client
+# Import supabase client
 try:
     from supabase import create_client, Client
     SUPABASE_AVAILABLE = True
 except ImportError:
     SUPABASE_AVAILABLE = False
+    print("ERROR: Supabase client not installed. Run: pip install supabase")
+    sys.exit(1)
 
 # Setup logging
 logging.basicConfig(level=logging.INFO, format='%(levelname)s: %(message)s')
 logger = logging.getLogger(__name__)
 
 class PharmCheckerSetup:
-    def __init__(self, backend: str = None):
+    def __init__(self):
         self.project_root = Path(__file__).parent
         self.env_file = self.project_root / '.env'
         self.env_example = self.project_root / '.env.example'
         self.requirements_file = self.project_root / 'requirements.txt'
-        self.schema_file = self.project_root / 'schema.sql'
-        self.functions_file = self.project_root / 'functions_comprehensive.sql'
         self.migrations_dir = self.project_root / 'migrations'
         self.data_dir = self.project_root / 'data'
         
-        # Backend configuration
-        self.backend = backend or self.detect_backend()
-        self.db_config = None
+        # Supabase client
         self.supabase_client = None
         
-        logger.info(f"🎯 Using backend: {self.backend}")
+        logger.info("🎯 Using Supabase backend")
     
-    def detect_backend(self) -> str:
-        """Auto-detect which backend to use based on environment variables"""
-        load_dotenv()
-        
-        # Check for Supabase configuration
-        supabase_url = os.getenv('SUPABASE_URL')
-        supabase_key = os.getenv('SUPABASE_ANON_KEY')
-        
-        # Check for PostgreSQL configuration  
-        db_host = os.getenv('DB_HOST')
-        
-        if supabase_url and supabase_key and SUPABASE_AVAILABLE:
-            return 'supabase'
-        elif db_host:
-            return 'postgresql'
-        else:
-            # Default to PostgreSQL
-            return 'postgresql'
         
     def run_setup(self) -> bool:
         """Run the complete setup process"""
         logger.info("🏥 PharmChecker Setup Starting...")
         
-        if self.backend == 'supabase':
-            steps = [
-                ("Checking environment file", self.check_env_file),
-                ("Installing Python dependencies", self.install_dependencies),
-                ("Loading configuration", self.load_configuration),
-                ("Testing Supabase connection", self.test_supabase_connection),
-                ("Running database migrations", self.run_migrations),
-                ("Setting up data directories", self.setup_data_directories),
-                ("Running verification tests", self.run_verification),
-            ]
-        else:  # postgresql
-            steps = [
-                ("Checking environment file", self.check_env_file),
-                ("Installing Python dependencies", self.install_dependencies),
-                ("Loading configuration", self.load_configuration),
-                ("Testing database connection", self.test_db_connection),
-                ("Running database migrations", self.run_migrations),
-                ("Setting up data directories", self.setup_data_directories),
-                ("Creating initial admin user", self.create_admin_user),
-                ("Running verification tests", self.run_verification),
-                ("Importing test data", self.import_test_data),
-            ]
+        steps = [
+            ("Checking environment file", self.check_env_file),
+            ("Installing Python dependencies", self.install_dependencies),
+            ("Loading configuration", self.load_configuration),
+            ("Testing Supabase connection", self.test_supabase_connection),
+            ("Running database migrations", self.run_migrations),
+            ("Setting up data directories", self.setup_data_directories),
+            ("Running verification tests", self.run_verification),
+        ]
         
         for step_name, step_func in steps:
             logger.info(f"📋 {step_name}...")
@@ -118,11 +80,8 @@ class PharmCheckerSetup:
                 content = src.read()
                 dst.write(content)
             
-            logger.warning("⚠️  IMPORTANT: Please edit .env file with your database credentials!")
-            if self.backend == 'postgresql':
-                logger.warning("   The default password is set to 'your_password_here' - you MUST change this.")
-            else:
-                logger.warning("   Please set your SUPABASE_URL and SUPABASE_ANON_KEY")
+            logger.warning("⚠️  IMPORTANT: Please edit .env file with your Supabase credentials!")
+            logger.warning("   Please set your SUPABASE_URL and SUPABASE_ANON_KEY")
             
             response = input("Have you updated the .env file with correct credentials? (y/N): ")
             if response.lower() != 'y':
@@ -132,26 +91,12 @@ class PharmCheckerSetup:
         # Load and validate .env
         load_dotenv(self.env_file)
         
-        if self.backend == 'supabase':
-            required_vars = ['SUPABASE_URL', 'SUPABASE_ANON_KEY']
-            missing_vars = [var for var in required_vars if not os.getenv(var)]
-            
-            if missing_vars:
-                logger.error(f"Missing required Supabase environment variables: {missing_vars}")
-                return False
-                
-        else:  # postgresql
-            required_vars = ['DB_HOST', 'DB_PORT', 'DB_NAME', 'DB_USER', 'DB_PASSWORD']
-            missing_vars = [var for var in required_vars if not os.getenv(var)]
-            
-            if missing_vars:
-                logger.error(f"Missing required PostgreSQL environment variables: {missing_vars}")
-                return False
-            
-            # Check for placeholder password
-            if os.getenv('DB_PASSWORD') == 'your_password_here':
-                logger.error("Please update DB_PASSWORD in .env file with your actual password!")
-                return False
+        required_vars = ['SUPABASE_URL', 'SUPABASE_ANON_KEY']
+        missing_vars = [var for var in required_vars if not os.getenv(var)]
+        
+        if missing_vars:
+            logger.error(f"Missing required Supabase environment variables: {missing_vars}")
+            return False
         
         return True
     
@@ -171,83 +116,24 @@ class PharmCheckerSetup:
             return False
     
     def load_configuration(self) -> bool:
-        """Load database configuration from environment"""
+        """Load Supabase configuration from environment"""
         try:
-            if self.backend == 'supabase':
-                # Create Supabase client
-                url = os.getenv('SUPABASE_URL')
-                key = os.getenv('SUPABASE_ANON_KEY')
-                
-                if not SUPABASE_AVAILABLE:
-                    logger.error("Supabase client not available. Run: pip install supabase")
-                    return False
-                
-                self.supabase_client = create_client(url, key)
-                logger.info(f"Supabase client configured for: {url}")
-                
-            else:  # postgresql
-                self.db_config = {
-                    'host': os.getenv('DB_HOST'),
-                    'port': int(os.getenv('DB_PORT')),
-                    'database': os.getenv('DB_NAME'),
-                    'user': os.getenv('DB_USER'),
-                    'password': os.getenv('DB_PASSWORD')
-                }
-                logger.info(f"PostgreSQL configured for: {self.db_config['host']}:{self.db_config['port']}/{self.db_config['database']}")
-                
+            # Create Supabase client
+            url = os.getenv('SUPABASE_URL')
+            key = os.getenv('SUPABASE_ANON_KEY')
+            
+            if not SUPABASE_AVAILABLE:
+                logger.error("Supabase client not available. Run: pip install supabase")
+                return False
+            
+            self.supabase_client = create_client(url, key)
+            logger.info(f"Supabase client configured for: {url}")
+            
             return True
         except (ValueError, TypeError) as e:
             logger.error(f"Invalid configuration: {e}")
             return False
     
-    def test_db_connection(self) -> bool:
-        """Test database connection and create database if it doesn't exist"""
-        # First try to connect to the target database
-        try:
-            conn = psycopg2.connect(**self.db_config)
-            conn.close()
-            return True
-        except psycopg2.OperationalError as e:
-            if "does not exist" in str(e):
-                # Try to create the database
-                logger.info(f"Database {self.db_config['database']} doesn't exist, creating it...")
-                return self.create_database()
-            else:
-                logger.error(f"Database connection failed: {e}")
-                return False
-    
-    def create_database(self) -> bool:
-        """Create the database if it doesn't exist"""
-        try:
-            # Connect to postgres database to create the target database
-            temp_config = self.db_config.copy()
-            temp_config['database'] = 'postgres'
-            
-            conn = psycopg2.connect(**temp_config)
-            conn.autocommit = True
-            
-            with conn.cursor() as cur:
-                # Check if database exists
-                cur.execute(
-                    "SELECT 1 FROM pg_database WHERE datname = %s",
-                    (self.db_config['database'],)
-                )
-                
-                if not cur.fetchone():
-                    # Create database
-                    cur.execute(
-                        sql.SQL("CREATE DATABASE {}").format(
-                            sql.Identifier(self.db_config['database'])
-                        )
-                    )
-                    logger.info(f"Created database {self.db_config['database']}")
-            
-            conn.close()
-            return True
-            
-        except Exception as e:
-            logger.error(f"Failed to create database: {e}")
-            return False
     
     def test_supabase_connection(self) -> bool:
         """Test Supabase connection"""
@@ -266,61 +152,19 @@ class PharmCheckerSetup:
                 return False
     
     def run_migrations(self) -> bool:
-        """Run database migrations using the migration system"""
+        """Check if Supabase schema is set up"""
         try:
-            # For Supabase with local Docker, check if schema exists
-            if self.backend == 'supabase':
-                try:
-                    # Test if core tables exist
-                    response = self.supabase_client.table('datasets').select('*').limit(1).execute()
-                    logger.info("✅ Supabase schema already set up")
-                    return True
-                except Exception as e:
-                    if 'does not exist' in str(e):
-                        logger.error("Schema not found. Please run: python setup_supabase_schema.py")
-                        return False
-                    else:
-                        logger.error(f"Error checking schema: {e}")
-                        return False
-            
-            # Import the migration runner for PostgreSQL
-            sys.path.insert(0, str(self.migrations_dir))
-            from migrate import MigrationRunner
-            
-            # Determine target based on backend
-            target = 'local'  # Only PostgreSQL uses migrations
-            
-            # Create and run migrations
-            runner = MigrationRunner(target=target)
-            
-            # Get current status
-            runner.connection = runner.get_connection()
-            try:
-                runner.ensure_migration_table()
-                applied = set(runner.get_applied_migrations())
-                available = runner.get_available_migrations()
-                pending = [(v, n, p) for v, n, p in available if v not in applied]
-                
-                if not pending:
-                    logger.info("✅ All migrations already applied")
-                    return True
-                
-                logger.info(f"Applying {len(pending)} pending migrations...")
-                
-                for version, name, file_path in pending:
-                    logger.info(f"  • {version}: {name}")
-                    runner.apply_migration(version, name, file_path)
-                
-                logger.info(f"✅ Applied {len(pending)} migrations successfully")
-                return True
-                
-            finally:
-                if runner.connection:
-                    runner.connection.close()
-                    
+            # Test if core tables exist
+            response = self.supabase_client.table('datasets').select('*').limit(1).execute()
+            logger.info("✅ Supabase schema already set up")
+            return True
         except Exception as e:
-            logger.error(f"Migration failed: {e}")
-            return False
+            if 'does not exist' in str(e):
+                logger.error("Schema not found. Please run: python setup_supabase_schema.py")
+                return False
+            else:
+                logger.error(f"Error checking schema: {e}")
+                return False
     
     def create_supabase_schema(self) -> bool:
         """Create database schema in Supabase automatically using service key (DEPRECATED - use run_migrations)"""
@@ -503,52 +347,6 @@ print("✅ Statement prepared for execution")
             logger.warning(f"Statement execution failed: {e}")
             return False
     
-    def create_schema(self) -> bool:
-        """Create database schema from schema.sql (DEPRECATED - use run_migrations)"""
-        if not self.schema_file.exists():
-            logger.error("schema.sql not found!")
-            return False
-        
-        try:
-            with open(self.schema_file) as f:
-                schema_sql = f.read()
-            
-            conn = psycopg2.connect(**self.db_config)
-            with conn.cursor() as cur:
-                cur.execute(schema_sql)
-            conn.commit()
-            conn.close()
-            
-            return True
-        except Exception as e:
-            logger.error(f"Failed to create schema: {e}")
-            return False
-    
-    def create_functions(self) -> bool:
-        """Create database functions from functions_comprehensive.sql (DEPRECATED - use run_migrations)"""
-        if not self.functions_file.exists():
-            logger.error("functions_comprehensive.sql not found!")
-            return False
-        
-        try:
-            with open(self.functions_file) as f:
-                functions_sql = f.read()
-            
-            conn = psycopg2.connect(**self.db_config)
-            with conn.cursor() as cur:
-                # Drop existing functions first to avoid conflicts
-                cur.execute("DROP FUNCTION IF EXISTS get_results_matrix(text,text,text);")
-                cur.execute("DROP FUNCTION IF EXISTS find_missing_scores(text,text);")
-                
-                # Create the new functions
-                cur.execute(functions_sql)
-            conn.commit()
-            conn.close()
-            
-            return True
-        except Exception as e:
-            logger.error(f"Failed to create functions: {e}")
-            return False
     
     def setup_data_directories(self) -> bool:
         """Create necessary data directories"""
@@ -560,95 +358,11 @@ print("✅ Statement prepared for execution")
             logger.error(f"Failed to create data directories: {e}")
             return False
     
-    def create_admin_user(self) -> bool:
-        """Create an initial admin user"""
-        try:
-            conn = psycopg2.connect(**self.db_config)
-            with conn.cursor() as cur:
-                # Check if any users exist
-                cur.execute("SELECT COUNT(*) FROM app_users")
-                user_count = cur.fetchone()[0]
-                
-                if user_count == 0:
-                    # Create admin user
-                    admin_login = input("Enter admin GitHub username (or press Enter to skip): ").strip()
-                    if admin_login:
-                        cur.execute("""
-                            INSERT INTO app_users (github_login, role, is_active)
-                            VALUES (%s, 'admin', true)
-                            ON CONFLICT (github_login) DO NOTHING
-                        """, (admin_login,))
-                        conn.commit()
-                        logger.info(f"Created admin user: {admin_login}")
-                    else:
-                        logger.info("Skipped admin user creation - you can add users later")
-            
-            conn.close()
-            return True
-        except Exception as e:
-            logger.error(f"Failed to create admin user: {e}")
-            return False
     
     def run_verification(self) -> bool:
         """Run verification tests to ensure everything is working"""
-        if self.backend == 'supabase':
-            return self._verify_supabase()
-        else:
-            return self._verify_postgresql()
+        return self._verify_supabase()
     
-    def _verify_postgresql(self) -> bool:
-        """Verify PostgreSQL setup"""
-        try:
-            conn = psycopg2.connect(**self.db_config)
-            with conn.cursor() as cur:
-                # Test 1: Check all tables exist
-                expected_tables = [
-                    'datasets', 'pharmacies', 'search_results', 
-                    'match_scores', 'validated_overrides', 'image_assets', 'app_users'
-                ]
-                
-                cur.execute("""
-                    SELECT table_name 
-                    FROM information_schema.tables 
-                    WHERE table_schema = 'public'
-                """)
-                actual_tables = {row[0] for row in cur.fetchall()}
-                
-                missing_tables = set(expected_tables) - actual_tables
-                if missing_tables:
-                    logger.error(f"Missing tables: {missing_tables}")
-                    return False
-                
-                # Test 2: Check functions exist
-                cur.execute("""
-                    SELECT routine_name 
-                    FROM information_schema.routines 
-                    WHERE routine_schema = 'public'
-                    AND routine_name IN ('get_all_results_with_context')
-                """)
-                functions = {row[0] for row in cur.fetchall()}
-                
-                expected_functions = {'get_all_results_with_context'}
-                missing_functions = expected_functions - functions
-                if missing_functions:
-                    logger.error(f"Missing functions: {missing_functions}")
-                    return False
-                
-                # Test 3: Check trigram extension
-                cur.execute("""
-                    SELECT 1 FROM pg_extension WHERE extname = 'pg_trgm'
-                """)
-                if not cur.fetchone():
-                    logger.error("pg_trgm extension not installed!")
-                    return False
-                
-                logger.info("✅ All verification tests passed!")
-            
-            conn.close()
-            return True
-        except Exception as e:
-            logger.error(f"PostgreSQL verification failed: {e}")
-            return False
     
     def _verify_supabase(self) -> bool:
         """Verify Supabase setup using the client"""
@@ -686,63 +400,6 @@ print("✅ Statement prepared for execution")
             logger.error(f"Supabase verification failed: {e}")
             return False
     
-    def import_test_data(self) -> bool:
-        """Import test data including pharmacies and states"""
-        try:
-            # Ask user if they want to import test data
-            response = input("Import test data (pharmacies and states)? (Y/n): ").strip()
-            if response.lower() in ('n', 'no'):
-                logger.info("Skipped test data import")
-                return True
-            
-            # Import pharmacies first
-            logger.info("Importing test pharmacy data...")
-            result = subprocess.run([
-                sys.executable, '-c',
-                """
-import os
-from dotenv import load_dotenv
-load_dotenv()
-from imports.pharmacies import PharmacyImporter
-importer = PharmacyImporter()
-success = importer.import_csv('data/pharmacies_new.csv', tag='test_pharmacies', created_by='setup_user', description='Test pharmacy data from setup')
-print('✅ Pharmacy import successful!' if success else '❌ Pharmacy import failed!')
-exit(0 if success else 1)
-                """
-            ], capture_output=True, text=True)
-            
-            if result.returncode != 0:
-                logger.error(f"Pharmacy import failed: {result.stderr}")
-                return False
-            
-            logger.info("✅ Pharmacy data imported successfully")
-            
-            # Import states data
-            logger.info("Importing test state search data...")
-            result = subprocess.run([
-                sys.executable, '-c',
-                """
-import os
-from dotenv import load_dotenv
-load_dotenv()
-from imports.states import StateImporter
-importer = StateImporter()
-success = importer.import_directory('data/states_baseline', tag='states_baseline', created_by='setup_user', description='Test state search data from setup')
-print('✅ States import successful!' if success else '❌ States import failed!')
-exit(0 if success else 1)
-                """
-            ], capture_output=True, text=True)
-            
-            if result.returncode != 0:
-                logger.error(f"States import failed: {result.stderr}")
-                return False
-            
-            logger.info("✅ State search data imported successfully")
-            return True
-            
-        except Exception as e:
-            logger.error(f"Failed to import test data: {e}")
-            return False
     
     def print_next_steps(self) -> None:
         """Print next steps for the user"""
@@ -759,19 +416,12 @@ exit(0 if success else 1)
         logger.info("   make status")
         logger.info("")
         logger.info("4. Import additional data:")
-        logger.info("   make import_test_states2    # Additional test states")
         logger.info("   make dev                    # Full development data import")
         logger.info("="*60)
 
 def main():
     """Main entry point"""
-    parser = argparse.ArgumentParser(description='PharmChecker Setup Script')
-    parser.add_argument('--backend', choices=['postgresql', 'supabase'], 
-                       help='Database backend to use (auto-detected if not specified)')
-    
-    args = parser.parse_args()
-    
-    setup = PharmCheckerSetup(backend=args.backend)
+    setup = PharmCheckerSetup()
     success = setup.run_setup()
     sys.exit(0 if success else 1)
 

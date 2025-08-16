@@ -183,7 +183,7 @@ The Makefile provides convenient commands for common tasks:
 make setup          # Initialize/reset database
 make status         # Show current database state
 make clean_all      # Complete database reset
-make clean_states   # Remove search data only
+make clean          # Remove all data
 
 # Data import
 make import_pharmacies     # Import test pharmacy data
@@ -359,7 +359,7 @@ Error: duplicate key value violates unique constraint
 ```
 Solution:
 - Use different tag for dataset
-- Or clean existing data: `make clean_states`
+- Or clean existing data: `make clean`
 
 #### Scoring Engine Timeout
 ```

@@ -110,21 +110,21 @@ class APIImporter:
 ### Import Methods by Data Type
 
 #### 1. CSV Imports (Simplified, Reliable)
-- **Pharmacy CSV**: `python -m imports.api_importer pharmacies file.csv tag --backend supabase`
-- **States CSV**: `python -m imports.api_importer states file.csv tag --backend supabase`  
-- **Validated CSV**: `python -m imports.api_importer validated file.csv tag --backend supabase`
+- **Pharmacy CSV**: `python -m imports.api_importer pharmacies file.csv tag`
+- **States CSV**: `python -m imports.api_importer states file.csv tag`  
+- **Validated CSV**: `python -m imports.api_importer validated file.csv tag`
 - **Batch Size**: Always 1 (one record at a time for reliability)
 - **Error Handling**: Continues on failure, reports specific issues
 
 #### 2. Production Scrape Import (High Performance)
-- **Resilient Importer**: `python imports/resilient_importer.py --states-dir path --tag name --backend supabase`
+- **Resilient Importer**: `python imports/resilient_importer.py --states-dir path --tag name`
 - **Batch Processing**: Uses configurable batch sizes for large datasets  
 - **Image Handling**: Processes and uploads screenshots with deduplication
 - **Resume Capability**: Can resume interrupted imports
 
 ### Import Architecture Benefits
 
-- **No PostgreSQL Dependency**: Supabase-only for simplified deployment
+- **Supabase-Only**: Simplified deployment with cloud database
 - **Better Error Reporting**: Shows exactly which record failed and why
 - **GUI Integration**: Direct integration with Streamlit interface
 - **Simplified Interface**: No complex batch size configuration needed
@@ -330,7 +330,7 @@ Current issue: Images linked to dataset + search metadata, not individual result
 ## Deployment Considerations
 
 ### Database Requirements
-- PostgreSQL 13+ with pg_trgm extension
+- Supabase cloud database
 - Connection pooling for multi-user
 - Regular VACUUM for performance
 

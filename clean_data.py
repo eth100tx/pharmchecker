@@ -51,11 +51,6 @@ def clean_data_tables():
 
 def main():
     parser = argparse.ArgumentParser(description='Clean all data from PharmChecker database')
-    parser.add_argument('--backend', choices=['supabase'], default='supabase',
-                       help='Database backend (only supabase supported)')
-    
-    args = parser.parse_args()
-    
     success = clean_data_tables()
     sys.exit(0 if success else 1)
 

@@ -1,14 +1,14 @@
 #!/usr/bin/env python3
 """
-PharmChecker Database Migration Runner
+PharmChecker Supabase Schema Documentation Tool
 
-This script applies database migrations to either local PostgreSQL or Supabase.
-It tracks applied migrations to avoid duplicate applications.
+This script provides information about Supabase schema setup and verification.
+Since Supabase requires manual SQL execution via the dashboard, this tool 
+helps manage the setup process.
 """
 
 import os
 import sys
-import psycopg2
 import argparse
 from pathlib import Path
 from datetime import datetime
@@ -19,167 +19,179 @@ import logging
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 logger = logging.getLogger(__name__)
 
-class MigrationRunner:
-    def __init__(self, target: str = 'local'):
-        self.target = target
+class SupabaseSchemaManager:
+    def __init__(self):
         self.migrations_dir = Path(__file__).parent / 'migrations'
-        self.connection = None
+        self.consolidated_sql = Path(__file__).parent / 'supabase_setup_consolidated.sql'
         
-    def get_connection(self):
-        """Get database connection based on target"""
-        if self.target == 'supabase':
-            return self._get_supabase_connection()
+    def show_setup_instructions(self):
+        """Show manual Supabase setup instructions"""
+        print("\n" + "="*80)
+        print("🗄️  SUPABASE SCHEMA SETUP INSTRUCTIONS")
+        print("="*80)
+        print("\nPharmChecker uses Supabase as the database backend.")
+        print("Schema setup requires manual SQL execution via Supabase Dashboard.\n")
+        
+        print("📋 SETUP STEPS:")
+        print("-" * 40)
+        print("1. Go to https://supabase.com/dashboard")
+        print("2. Select your PharmChecker project")
+        print("3. Open 'SQL Editor' in the left sidebar")
+        print("4. Click '+ New query'")
+        print("5. Copy and paste the consolidated schema (see below)")
+        print("6. Click 'Run' to execute\n")
+        
+        if self.consolidated_sql.exists():
+            print(f"📄 CONSOLIDATED SCHEMA FILE:")
+            print(f"   {self.consolidated_sql}")
+            print(f"   Copy the entire contents of this file to Supabase SQL Editor\n")
         else:
-            return self._get_local_connection()
+            print("❌ Consolidated schema file not found!")
+            print(f"   Expected: {self.consolidated_sql}\n")
+            
+        print("🔍 VERIFICATION:")
+        print("-" * 40)
+        print("After setup, verify by running:")
+        print("   python setup.py")
+        print("   python system_test.py\n")
+        
+        print("📚 SCHEMA COMPONENTS:")
+        print("-" * 40)
+        self._list_migration_files()
+        
+    def _list_migration_files(self):
+        """List available migration files"""
+        if not self.migrations_dir.exists():
+            print("❌ Migrations directory not found!")
+            return
+            
+        migration_files = sorted(self.migrations_dir.glob("*.sql"))
+        if not migration_files:
+            print("❌ No migration files found!")
+            return
+            
+        for i, file_path in enumerate(migration_files, 1):
+            file_size = file_path.stat().st_size
+            print(f"   {i}. {file_path.name} ({file_size:,} bytes)")
     
-    def _get_supabase_connection(self):
-        """Connect to Supabase - manual setup required"""
-        raise NotImplementedError(
-            "Supabase migrations require manual setup. Please:\n\n"
-            "1. Go to https://supabase.com/dashboard\n"
-            "2. Select your project\n" 
-            "3. Open SQL Editor\n"
-            "4. Run these migration files in order:\n\n"
-            "   MIGRATION 1 - Initial Schema:\n"
-            "   Copy/paste: migrations/migrations/20240101000000_initial_schema.sql\n\n"
-            "   MIGRATION 2 - Functions:\n"
-            "   Copy/paste: migrations/migrations/20240101000001_comprehensive_functions.sql\n\n"
-            "   MIGRATION 3 - Indexes:\n"
-            "   Copy/paste: migrations/migrations/20240101000002_indexes_and_performance.sql\n\n"
-            "After manual setup, both databases will have identical schemas."
-        )
-    
-    def _get_local_connection(self):
-        """Connect to local PostgreSQL"""
+    def verify_supabase_connection(self):
+        """Verify Supabase configuration and connection"""
+        print("\n" + "="*60)
+        print("🔍 SUPABASE CONNECTION VERIFICATION")
+        print("="*60)
+        
+        # Check environment variables
         from dotenv import load_dotenv
         load_dotenv()
         
-        return psycopg2.connect(
-            host=os.getenv('DB_HOST', 'localhost'),
-            port=int(os.getenv('DB_PORT', 5432)),
-            database=os.getenv('DB_NAME', 'pharmchecker'),
-            user=os.getenv('DB_USER', 'postgres'),
-            password=os.getenv('DB_PASSWORD', '')
-        )
-    
-    def ensure_migration_table(self):
-        """Create migration tracking table if it doesn't exist"""
-        with self.connection.cursor() as cursor:
-            cursor.execute("""
-                CREATE TABLE IF NOT EXISTS pharmchecker_migrations (
-                    version VARCHAR(255) PRIMARY KEY,
-                    name VARCHAR(255),
-                    applied_at TIMESTAMP DEFAULT NOW()
-                );
-            """)
-            self.connection.commit()
-    
-    def get_applied_migrations(self) -> List[str]:
-        """Get list of already applied migrations"""
-        with self.connection.cursor() as cursor:
-            cursor.execute("SELECT version FROM pharmchecker_migrations ORDER BY version")
-            return [row[0] for row in cursor.fetchall()]
-    
-    def get_available_migrations(self) -> List[Tuple[str, str, Path]]:
-        """Get list of available migration files"""
-        migrations = []
-        for file_path in sorted(self.migrations_dir.glob('*.sql')):
-            version = file_path.stem
-            name = version.replace('_', ' ').title()
-            migrations.append((version, name, file_path))
-        return migrations
-    
-    def apply_migration(self, version: str, name: str, file_path: Path):
-        """Apply a single migration"""
-        logger.info(f"Applying migration {version}: {name}")
+        supabase_url = os.getenv('SUPABASE_URL')
+        supabase_anon_key = os.getenv('SUPABASE_ANON_KEY')
+        supabase_service_key = os.getenv('SUPABASE_SERVICE_KEY')
         
-        # Read migration file
-        with open(file_path, 'r') as f:
-            sql_content = f.read()
+        print("\n📋 Environment Variables:")
+        print(f"   SUPABASE_URL: {'✅ Set' if supabase_url else '❌ Missing'}")
+        print(f"   SUPABASE_ANON_KEY: {'✅ Set' if supabase_anon_key else '❌ Missing'}")
+        print(f"   SUPABASE_SERVICE_KEY: {'✅ Set' if supabase_service_key else '❌ Missing'}")
         
-        # Execute migration
-        with self.connection.cursor() as cursor:
-            cursor.execute(sql_content)
+        if not (supabase_url and supabase_anon_key):
+            print("\n❌ Missing required Supabase credentials!")
+            print("   Please set SUPABASE_URL and SUPABASE_ANON_KEY in your .env file")
+            return False
             
-            # Record migration as applied
-            cursor.execute(
-                "INSERT INTO pharmchecker_migrations (version, name) VALUES (%s, %s)",
-                (version, name)
-            )
-            
-            self.connection.commit()
-        
-        logger.info(f"✅ Applied migration {version}")
-    
-    def run_migrations(self):
-        """Run all pending migrations"""
-        self.connection = self.get_connection()
-        
+        # Test connection
         try:
-            self.ensure_migration_table()
+            from supabase import create_client
             
-            applied = set(self.get_applied_migrations())
-            available = self.get_available_migrations()
+            # Use service key if available, otherwise anon key
+            api_key = supabase_service_key or supabase_anon_key
+            client = create_client(supabase_url, api_key)
             
-            pending = [(v, n, p) for v, n, p in available if v not in applied]
+            # Test basic connectivity
+            response = client.table('datasets').select('*').limit(1).execute()
             
-            if not pending:
-                logger.info("✅ No pending migrations")
-                return
+            print(f"\n✅ Connection successful!")
+            print(f"   URL: {supabase_url}")
+            print(f"   Using: {'Service Key' if supabase_service_key else 'Anon Key'}")
             
-            logger.info(f"Found {len(pending)} pending migrations")
+            # Check for core tables
+            core_tables = ['datasets', 'pharmacies', 'search_results', 'match_scores', 'validated_overrides']
+            print(f"\n📊 Core Tables Check:")
             
-            for version, name, file_path in pending:
-                self.apply_migration(version, name, file_path)
+            table_status = {}
+            for table in core_tables:
+                try:
+                    response = client.table(table).select('*').limit(1).execute()
+                    table_status[table] = '✅ Exists'
+                except Exception as e:
+                    if 'does not exist' in str(e).lower():
+                        table_status[table] = '❌ Missing'
+                    else:
+                        table_status[table] = f'⚠️  Error: {str(e)[:30]}...'
             
-            logger.info(f"✅ Successfully applied {len(pending)} migrations to {self.target}")
-            
-        finally:
-            if self.connection:
-                self.connection.close()
+            for table, status in table_status.items():
+                print(f"   {table}: {status}")
+                
+            missing_tables = [table for table, status in table_status.items() if '❌' in status]
+            if missing_tables:
+                print(f"\n❌ Schema setup incomplete. Missing tables: {', '.join(missing_tables)}")
+                print("   Run schema setup instructions above.")
+                return False
+            else:
+                print(f"\n✅ Schema verification passed!")
+                return True
+                
+        except ImportError:
+            print(f"\n❌ Supabase client not installed!")
+            print("   Run: pip install supabase")
+            return False
+        except Exception as e:
+            print(f"\n❌ Connection failed: {e}")
+            return False
     
-    def show_status(self):
-        """Show migration status"""
-        self.connection = self.get_connection()
+    def show_migration_status(self):
+        """Show current migration status for documentation"""
+        print("\n" + "="*60)
+        print("📋 MIGRATION STATUS (Documentation Only)")
+        print("="*60)
+        print("\nFor Supabase, migrations are applied manually via SQL Dashboard.")
+        print("This tool provides documentation and verification only.\n")
         
-        try:
-            self.ensure_migration_table()
+        # List available migrations
+        self._list_migration_files()
+        
+        print(f"\n📄 For complete setup, use:")
+        if self.consolidated_sql.exists():
+            print(f"   {self.consolidated_sql}")
+        else:
+            print("   Individual migration files listed above")
             
-            applied = set(self.get_applied_migrations())
-            available = self.get_available_migrations()
-            
-            print(f"\n📊 Migration Status ({self.target})")
-            print("=" * 50)
-            
-            for version, name, file_path in available:
-                status = "✅ Applied" if version in applied else "⏳ Pending"
-                print(f"{status} | {version} | {name}")
-            
-            print(f"\nTotal: {len(available)} migrations, {len(applied)} applied")
-            
-        finally:
-            if self.connection:
-                self.connection.close()
+        print(f"\n🔍 To verify setup:")
+        print(f"   python migrations/migrate.py --verify")
 
 def main():
-    parser = argparse.ArgumentParser(description='PharmChecker Migration Runner')
-    parser.add_argument('--target', choices=['local', 'supabase'], default='local',
-                       help='Target database (default: local)')
-    parser.add_argument('--status', action='store_true',
-                       help='Show migration status instead of running migrations')
+    """Main entry point"""
+    parser = argparse.ArgumentParser(description='PharmChecker Supabase Schema Manager')
+    parser.add_argument('--status', action='store_true', 
+                       help='Show migration status and setup documentation')
+    parser.add_argument('--verify', action='store_true',
+                       help='Verify Supabase connection and schema')
+    parser.add_argument('--instructions', action='store_true', 
+                       help='Show detailed setup instructions')
     
     args = parser.parse_args()
     
-    runner = MigrationRunner(target=args.target)
+    manager = SupabaseSchemaManager()
     
-    try:
-        if args.status:
-            runner.show_status()
-        else:
-            runner.run_migrations()
-    except Exception as e:
-        logger.error(f"❌ Migration failed: {e}")
-        sys.exit(1)
+    if args.verify:
+        success = manager.verify_supabase_connection()
+        sys.exit(0 if success else 1)
+    elif args.status:
+        manager.show_migration_status()
+    elif args.instructions:
+        manager.show_setup_instructions()
+    else:
+        # Default: show instructions
+        manager.show_setup_instructions()
 
 if __name__ == '__main__':
     main()

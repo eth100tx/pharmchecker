@@ -71,7 +71,6 @@ class WorkState:
     """Tracks overall import progress and state"""
     dataset_id: int
     tag: str
-    backend: str
     total_files: int
     total_images: int
     start_time: str
@@ -138,11 +137,10 @@ class WorkStateManager:
 class ResilientImporter:
     """Main resilient importer with parallel processing"""
     
-    def __init__(self, backend: str = 'supabase', max_workers: int = 16, 
+    def __init__(self, max_workers: int = 16, 
                  max_concurrent_uploads: int = 10, batch_size: int = 25,
                  state_file: str = "work_state.json", verify_writes: bool = False,
                  debug_log: bool = False, single_file: str = None):
-        self.backend = backend.lower()
         self.max_workers = max_workers
         self.max_concurrent_uploads = max_concurrent_uploads
         self.batch_size = batch_size
@@ -182,30 +180,23 @@ class ResilientImporter:
         }
     
     def _setup_api_client(self):
-        """Setup API client based on backend"""
-        if self.backend == 'supabase':
-            import os
-            from dotenv import load_dotenv
-            load_dotenv()
-            
-            base_url = os.getenv('SUPABASE_URL')
-            service_key = os.getenv('SUPABASE_SERVICE_KEY')
-            if not base_url or not service_key:
-                raise ValueError("SUPABASE_URL and SUPABASE_SERVICE_KEY must be set")
-            
-            self.api_url = f"{base_url}/rest/v1"
-            self.session.headers.update({
-                'apikey': service_key,
-                'Authorization': f'Bearer {service_key}',
-                'Content-Type': 'application/json',
-                'Prefer': 'return=representation'
-            })
-        else:
-            self.api_url = "http://localhost:3000"
-            self.session.headers.update({
-                'Content-Type': 'application/json',
-                'Prefer': 'return=representation'
-            })
+        """Setup Supabase API client"""
+        import os
+        from dotenv import load_dotenv
+        load_dotenv()
+        
+        base_url = os.getenv('SUPABASE_URL')
+        service_key = os.getenv('SUPABASE_SERVICE_KEY')
+        if not base_url or not service_key:
+            raise ValueError("SUPABASE_URL and SUPABASE_SERVICE_KEY must be set")
+        
+        self.api_url = f"{base_url}/rest/v1"
+        self.session.headers.update({
+            'apikey': service_key,
+            'Authorization': f'Bearer {service_key}',
+            'Content-Type': 'application/json',
+            'Prefer': 'return=representation'
+        })
     
     def get_or_create_dataset(self, tag: str, description: str = None, created_by: str = None) -> Optional[int]:
         """Get existing dataset or create new one"""
@@ -220,7 +211,7 @@ class ResilientImporter:
             result = response.json()
             if result:
                 dataset_id = result[0]['id']
-                logger.info(f"📋 Using existing dataset '{tag}' (ID: {dataset_id}) in {self.backend}")
+                logger.info(f"📋 Using existing dataset '{tag}' (ID: {dataset_id}) in Supabase")
                 return dataset_id
                 
         except requests.exceptions.RequestException as e:
@@ -244,7 +235,7 @@ class ResilientImporter:
             
             result = response.json()
             dataset_id = result[0]['id'] if result else None
-            logger.info(f"✅ Created dataset '{tag}' (ID: {dataset_id}) in {self.backend}")
+            logger.info(f"✅ Created dataset '{tag}' (ID: {dataset_id}) in Supabase")
             return dataset_id
             
         except requests.exceptions.RequestException as e:
@@ -368,7 +359,6 @@ class ResilientImporter:
         work_state = WorkState(
             dataset_id=dataset_id,
             tag=tag,
-            backend=self.backend,
             total_files=len(work_items),
             total_images=total_images,
             start_time=datetime.now(timezone.utc).isoformat(),
@@ -546,7 +536,7 @@ class ResilientImporter:
                             
                             # Store image using existing image storage
                             from utils.image_storage import create_image_storage
-                            storage = create_image_storage(self.backend)
+                            storage = create_image_storage('supabase')
                             
                             png_path = Path(work_item.png_path)
                             content_hash, storage_path, metadata = storage.store_image(png_path)
@@ -999,7 +989,7 @@ class ResilientImporter:
         print("\n" + "="*80)
         print(f"📊 Import Progress: {work_state.tag} (Dataset ID: {work_state.dataset_id})")
         print("="*80)
-        print(f"⏱️  Elapsed: {elapsed//60:.0f}m {elapsed%60:.0f}s  |  Backend: {work_state.backend}")
+        print(f"⏱️  Elapsed: {elapsed//60:.0f}m {elapsed%60:.0f}s  |  Backend: Supabase")
         print(f"📁 Total Files: {work_state.total_files}  |  Images: {work_state.total_images}")
         
         print("\n📊 Phase Summary:")
@@ -1101,7 +1091,6 @@ def main():
     parser = argparse.ArgumentParser(description='Resilient PharmChecker state importer')
     parser.add_argument('--states-dir', help='Directory containing state data')
     parser.add_argument('--tag', help='Dataset tag')
-    parser.add_argument('--backend', choices=['postgresql', 'supabase'], default='supabase')
     parser.add_argument('--created-by', default='resilient_importer')
     parser.add_argument('--description', default=None)
     parser.add_argument('--max-workers', type=int, default=16, help='Max workers for SHA256')
@@ -1120,7 +1109,6 @@ def main():
         parser.error("--states-dir and --tag are required unless using --resume")
     
     importer = ResilientImporter(
-        backend=args.backend,
         max_workers=args.max_workers,
         max_concurrent_uploads=args.max_uploads,
         batch_size=args.batch_size,

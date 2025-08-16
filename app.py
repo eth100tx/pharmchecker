@@ -930,13 +930,12 @@ def render_simple_import_csv():
                     st.write(f"- Temp file: {tmp_path}")
                     
                     client = get_client()
-                    backend = client.get_active_backend().lower()
-                    st.write(f"- Backend: {backend}")
+                    st.write(f"- Backend: Supabase")
                     
                     # Build command
                     cmd = [
                         'python', '-m', 'imports.api_importer', 
-                        'pharmacies', tmp_path, pharmacy_tag, '--backend', backend
+                        'pharmacies', tmp_path, pharmacy_tag
                     ]
                     st.write(f"- Command: {' '.join(cmd)}")
                     
@@ -1006,13 +1005,12 @@ def render_simple_import_csv():
                     st.write(f"- Temp file: {tmp_path}")
                     
                     client = get_client()
-                    backend = client.get_active_backend().lower()
-                    st.write(f"- Backend: {backend}")
+                    st.write(f"- Backend: Supabase")
                     
                     # Build command
                     cmd = [
                         'python', '-m', 'imports.api_importer', 
-                        'states', tmp_path, states_tag, '--backend', backend
+                        'states', tmp_path, states_tag
                     ]
                     st.write(f"- Command: {' '.join(cmd)}")
                     
@@ -1060,11 +1058,10 @@ def render_simple_import_csv():
                         tmp_path = tmp.name
                     
                     client = get_client()
-                    backend = client.get_active_backend().lower()
                     
                     result = subprocess.run([
                         'python', '-m', 'imports.api_importer', 
-                        'validated', tmp_path, validated_tag, '--backend', backend
+                        'validated', tmp_path, validated_tag
                     ], capture_output=True, text=True)
                     
                     os.unlink(tmp_path)

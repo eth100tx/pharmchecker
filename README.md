@@ -13,17 +13,17 @@ PharmChecker streamlines pharmacy license verification across multiple U.S. stat
 - **Validating** findings manually with audit trail support
 - **Exporting** verified results for compliance reporting
 
-**Key Features:** Dual database support (PostgreSQL/Supabase), unified migration system, dataset versioning, lazy scoring computation, multi-user sessions, natural key linking (no hardcoded IDs), comprehensive validation system with overrides.
+**Key Features:** Supabase cloud database, dataset versioning, lazy scoring computation, multi-user sessions, natural key linking (no hardcoded IDs), comprehensive validation system with overrides.
 
 ## Architecture Overview
 
 ```
-CSV/JSON Files → Import System → Database (PostgreSQL/Supabase) → Scoring Engine → Web Interface
-                       ↓                      ↓
+CSV/JSON Files → Import System → Supabase Database → Scoring Engine → Web Interface
+                       ↓                   ↓
                  SHA256 Image Storage   Versioned Datasets + Screenshots + Validations
 ```
 
-- **Dual database support** with PostgreSQL (local) or Supabase (cloud) via unified migration system
+- **Supabase cloud database** with REST API endpoints for all operations
 - **SHA256 image deduplication** prevents storage of duplicate screenshots
 - **Lazy scoring system** computes address matches only when needed
 - **Multi-user support** with session management and authentication  
@@ -32,7 +32,7 @@ CSV/JSON Files → Import System → Database (PostgreSQL/Supabase) → Scoring 
 ## Quick Start
 
 ### Prerequisites
-- **Database**: PostgreSQL 13+ with `pg_trgm` extension OR Supabase account
+- **Database**: Supabase account and project
 - **Runtime**: Python 3.8+
 - **Storage**: 2GB free disk space for data and screenshots
 
@@ -46,22 +46,17 @@ cd pharmchecker
 # 2. Install dependencies  
 pip install -r requirements.txt
 
-# 3. Configure database
+# 3. Configure Supabase
 cp .env.example .env
-# Option A: Local PostgreSQL
-#   Edit DB_HOST, DB_PORT, DB_NAME, DB_USER, DB_PASSWORD
-# Option B: Supabase  
-#   Edit SUPABASE_URL, SUPABASE_SERVICE_KEY
+# Edit SUPABASE_URL and SUPABASE_SERVICE_KEY with your Supabase project credentials
 
-# 4. Initialize database
-python setup.py                       # Auto-detects backend from .env
-# OR force specific backend:
-python setup.py --backend postgresql  # Force local PostgreSQL
-python setup.py --backend supabase    # Force Supabase
-
-# 5. For Supabase: Manual SQL Setup Required
-# If using Supabase, run this SQL in your Supabase Dashboard:
+# 4. Set up Supabase schema
+# Run this SQL in your Supabase Dashboard SQL Editor:
 # Copy/paste: migrations/supabase_setup_consolidated.sql
+
+# 5. Initialize and verify
+python setup.py                       # Verify Supabase connection
+python migrations/migrate.py --verify # Verify schema setup
 
 # 6. Run system test to verify installation
 python system_test.py
@@ -87,7 +82,7 @@ The web dashboard includes:
 
 ## Database Migration System
 
-PharmChecker includes a unified migration system that ensures identical database schemas across PostgreSQL and Supabase environments.
+PharmChecker uses Supabase for cloud database operations with manual schema setup via SQL Dashboard.
 
 ### Migration Components
 
@@ -107,12 +102,12 @@ migrations/
 
 ```bash
 # Check migration status
-python migrations/migrate.py --status --target local     # PostgreSQL
-python migrations/migrate.py --status --target supabase  # Supabase (shows manual instructions)
+python migrations/migrate.py --status        # Show schema documentation
+python migrations/migrate.py --verify        # Verify Supabase setup
 
-# Apply migrations
-python migrations/migrate.py --target local              # PostgreSQL (automatic)
-# For Supabase: Use consolidated SQL file in Dashboard
+# Schema setup for Supabase
+# Manual setup required via Supabase Dashboard SQL Editor
+# Use: migrations/supabase_setup_consolidated.sql
 
 # Setup with migrations (recommended)
 python setup.py                                          # Auto-detects and applies migrations
@@ -120,17 +115,15 @@ python setup.py                                          # Auto-detects and appl
 
 ### Database Backend Detection
 
-The system automatically detects which database backend to use:
-
-1. **Supabase Detection**: If `SUPABASE_URL` and `SUPABASE_SERVICE_KEY` are set
-2. **PostgreSQL Detection**: If `DB_HOST` and related PostgreSQL vars are set  
-3. **Manual Override**: Use `--backend postgresql` or `--backend supabase`
+Supabase configuration is automatically detected from environment variables:
+- `SUPABASE_URL` - Your Supabase project URL
+- `SUPABASE_SERVICE_KEY` - Service role key for admin operations
 
 ### Migration Features
 
 - ✅ **Version Tracking**: All migrations tracked in `pharmchecker_migrations` table
 - ✅ **Idempotent**: Safe to run multiple times, skips applied migrations
-- ✅ **Schema Consistency**: Identical tables, functions, indexes across backends
+- ✅ **Schema Consistency**: All tables, functions, and indexes in Supabase
 - ✅ **Atomic Operations**: Each migration runs in a transaction
 - ✅ **Rollback Ready**: Migration tracking supports future rollback features
 
@@ -140,23 +133,23 @@ The system automatically detects which database backend to use:
 pharmchecker/
 ├── README.md                   # This file
 ├── requirements.txt            # Python dependencies
-├── setup.py                   # Database initialization (auto-detects backend)
+├── setup.py                   # Database initialization
 ├── app.py                     # Streamlit web interface
 ├── schema.sql                 # Legacy database schema
 ├── migrations/                # Unified migration system
-│   ├── migrate.py             # Migration runner for both backends
+│   ├── migrate.py             # Migration documentation and verification tool
 │   ├── migrations/            # Versioned migration files
 │   └── supabase_setup_consolidated.sql  # Complete Supabase setup
 ├── system_test.py             # End-to-end validation
 ├── imports/                   # Data import system
 │   ├── resilient_importer.py  # High-performance production importer
-│   ├── api_importer.py        # API-based importer (PostgreSQL/Supabase)
+│   ├── api_importer.py        # API-based importer (Supabase)
 │   ├── pharmacies.py          # Legacy CSV pharmacy importer
 │   ├── states.py              # Legacy JSON search results importer
 │   ├── scoring.py             # Address matching engine
 │   └── validated.py           # Manual validation importer
 ├── api_poc/                   # API and GUI proof of concept
-│   ├── gui/                   # Streamlit GUI for dual backend
+│   ├── gui/                   # Streamlit GUI for API testing
 │   └── postgrest/             # PostgREST API server
 ├── utils/                     # GUI utilities
 │   ├── database.py            # Database operations
@@ -177,14 +170,12 @@ For large-scale imports (500+ files), use the resilient importer:
 
 ```bash
 # Import state search results with images
-make import_scrape_states                    # Supabase (production)
-make import_scrape_states_local              # PostgreSQL (local)
+make import_scrape_states                    # Import with images (Supabase)
 
 # Direct usage with options
 python3 imports/resilient_importer.py \
     --states-dir "/path/to/data" \
     --tag "Aug-04-scrape" \
-    --backend supabase \
     --batch-size 25 \
     --max-workers 16 \
     --debug-log
@@ -208,20 +199,18 @@ For smaller datasets, use the legacy API-based importers:
 
 ```bash
 # Pharmacy data (CSV)
-make import_pharmacies                       # PostgreSQL
-BACKEND=supabase make import_pharmacies      # Supabase
+make import_pharmacies                       # Supabase
 
 # State search results (JSON) - small datasets only
-make import_test_states                      # PostgreSQL  
-BACKEND=supabase make import_test_states     # Supabase
+make import_test_states                      # Supabase
 ```
 
 ## Typical Workflow
 
-1. **Import pharmacy data**: `make import_pharmacies` or `BACKEND=supabase make import_pharmacies`
+1. **Import pharmacy data**: `make import_pharmacies`
 2. **Import state searches**: 
    - **Large datasets (500+ files)**: `make import_scrape_states` (recommended)
-   - **Small test datasets**: `make import_test_states` or `BACKEND=supabase make import_test_states`
+   - **Small test datasets**: `make import_test_states`
 3. **Launch web interface**: `streamlit run app.py`
 4. **Select datasets**: Choose pharmacy and state datasets in sidebar
 5. **Review results**: System auto-computes address match scores (85+ = match)
@@ -232,9 +221,9 @@ BACKEND=supabase make import_test_states     # Supabase
 
 1. **Start PostgREST API**: `cd api_poc/postgrest && ./postgrest postgrest.conf`
 2. **Launch API GUI**: `cd api_poc/gui && streamlit run app.py --server.port 8502`
-3. **Access dual backend**: Switch between PostgreSQL and Supabase in GUI
+3. **Access Supabase backend**: All operations via Supabase REST API
 4. **Import via API**: Use Data Manager page for file uploads and transfers
-5. **Comprehensive results**: Query both backends through unified interface
+5. **Comprehensive results**: Query Supabase through unified interface
 
 ## Key Features
 
@@ -268,16 +257,14 @@ BACKEND=supabase make import_test_states     # Supabase
 
 ```bash
 # Database management
-make setup           # Initialize database (uses auto-detection)
-python setup.py --backend postgresql  # Force PostgreSQL setup
-python setup.py --backend supabase    # Force Supabase setup
+make setup           # Initialize Supabase connection
+python setup.py      # Verify Supabase setup
 make status          # Show current data
 make clean_all       # Full reset
 
-# Migration management
-python migrations/migrate.py --status          # Check migration status
-python migrations/migrate.py --target local    # Apply to PostgreSQL
-python migrations/migrate.py --target supabase # Apply to Supabase (manual)
+# Schema management
+python migrations/migrate.py --status    # Show schema documentation
+python migrations/migrate.py --verify    # Verify Supabase schema
 
 # Development workflow  
 make dev            # Import all test data
@@ -285,19 +272,14 @@ python system_test.py    # Run end-to-end test
 
 # Production data import (Resilient Importer - recommended)
 make import_scrape_states                 # Import state searches with images (Supabase)
-make import_scrape_states_local           # Import state searches with images (PostgreSQL)
 
 # Legacy data import (API-based - for small datasets)
-make import_pharmacies                    # Import pharmacy data (PostgreSQL)
-BACKEND=supabase make import_pharmacies   # Import pharmacy data (Supabase)
-make import_test_states                   # Import state search results (PostgreSQL)
-BACKEND=supabase make import_test_states  # Import state search results (Supabase)
+make import_pharmacies                    # Import pharmacy data (Supabase)
+make import_test_states                   # Import state search results (Supabase)
 
 # Direct API import (advanced usage)
-python -m imports.api_importer pharmacies <csv_file> <tag> --backend postgresql
-python -m imports.api_importer pharmacies <csv_file> <tag> --backend supabase
-python -m imports.api_importer states <states_dir> <tag> --backend postgresql
-python -m imports.api_importer states <states_dir> <tag> --backend supabase
+python -m imports.api_importer pharmacies <csv_file> <tag>
+python -m imports.api_importer states <states_dir> <tag>
 
 # Testing
 python test_scoring.py   # Test address matching algorithm
@@ -318,13 +300,13 @@ python test_gui.py       # Test web interface components
 ## System Requirements
 
 ### Minimum Requirements
-- **Database**: PostgreSQL 13+ with admin access OR Supabase account
+- **Database**: Supabase account and project
 - **Runtime**: Python 3.8+ with pip
 - **Storage**: 2GB available disk space
 - **Memory**: 4GB RAM
 
 ### Recommended for Production
-- **Database**: PostgreSQL 14+ dedicated instance OR Supabase Pro plan
+- **Database**: Supabase Pro plan
 - **Runtime**: Python 3.10+
 - **Storage**: 10GB+ disk space for screenshots
 - **Memory**: 8GB+ RAM for large datasets
@@ -332,15 +314,15 @@ python test_gui.py       # Test web interface components
 
 ## Technology Stack
 
-- **Database**: PostgreSQL 13+ with pg_trgm extension OR Supabase (cloud PostgreSQL)
+- **Database**: Supabase (cloud PostgreSQL with REST API)
 - **Backend**: Python 3.8+, psycopg2, SQLAlchemy  
 - **API Layer**: PostgREST (local) OR Supabase REST API (cloud)
 - **Scoring Engine**: Client-side `scoring_plugin.py` with RapidFuzz address matching
 - **Web Framework**: Streamlit 1.28+ with Plotly charts
 - **Data Processing**: pandas, RapidFuzz (address matching)
-- **Import System**: REST API-based importers for dual backend support
+- **Import System**: REST API-based importers for Supabase
 - **Dependencies**: python-dotenv, python-slugify, requests
-- **Migration System**: Custom unified migration runner for both backends
+- **Migration System**: Supabase schema management with SQL migrations
 - **Testing**: Built-in test suite (system_test.py)
 
 ## Project Status

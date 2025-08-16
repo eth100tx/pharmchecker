@@ -488,7 +488,7 @@ Error: duplicate key value violates unique constraint
 ```
 **Solution:** Use unique tag or clean data first
 ```bash
-make clean_states
+make clean
 # or
 python -m imports.pharmacies data.csv "test_$(date +%s)"
 ```

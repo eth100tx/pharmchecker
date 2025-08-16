@@ -17,33 +17,25 @@ UNIQUE(dataset_id, search_state, license_number)
 -- Latest timestamp wins for duplicates
 ```
 
-### Unified Migration System - NEW
-The system now uses a **unified migration system** that supports both PostgreSQL and Supabase:
-- All schema changes go through versioned migrations in `migrations/` directory
-- `setup.py` automatically detects backend and applies migrations
-- Migration tracking table: `pharmchecker_migrations`
-- Never modify `schema.sql` directly - use migrations instead
-
-### Database Backend Support
-- **PostgreSQL (Local)**: Automatic migration via `python migrations/migrate.py`
-- **Supabase (Cloud)**: Manual SQL execution in Supabase Dashboard
-- **Auto-Detection**: `setup.py` chooses backend based on environment variables
+### Supabase Schema Management
+The system uses **Supabase as the exclusive database backend**:
+- Schema setup via manual SQL execution in Supabase Dashboard
+- Use `migrations/supabase_setup_consolidated.sql` for complete setup
+- `migrations/migrate.py` provides documentation and verification tools
+- Never modify schema files directly - use Supabase Dashboard SQL Editor
 
 ### MCP Database Access (Claude Only) 
-When debugging, use MCP tools - the application itself uses standard PostgreSQL connections via .env:
-- `mcp__postgres-prod__query` - Production database queries  
+When debugging, use MCP tools - the application itself uses Supabase REST API:
 - `mcp__supabase__*` - Supabase integration (read-only)
-- Application uses: psycopg2 with credentials from .env file
+- Application uses: Supabase Python client with REST API endpoints
 
 ## Core Commands
 
 ```bash
-# Database setup and migrations
-python setup.py                              # Auto-detect backend and setup
-python setup.py --backend postgresql         # Force PostgreSQL setup
-python setup.py --backend supabase          # Force Supabase setup
-python migrations/migrate.py --status        # Check migration status
-python migrations/migrate.py --target local  # Apply PostgreSQL migrations
+# Database setup and verification
+python setup.py                              # Verify Supabase connection
+python migrations/migrate.py --status        # Show schema documentation
+python migrations/migrate.py --verify        # Verify Supabase schema setup
 
 # Quick development workflow
 make dev              # Import all test data
@@ -59,14 +51,13 @@ python test_gui.py       # Test UI components
 
 # Production data import (Resilient Importer - recommended for 500+ files)
 make import_scrape_states         # Import state searches with images (Supabase)
-make import_scrape_states_local   # Import state searches with images (PostgreSQL)
 
 # Legacy data import (for small datasets)
 python -m imports.pharmacies <csv> <tag>
 python -m imports.states <json_dir> <tag>
 
 # Direct resilient importer usage
-python3 imports/resilient_importer.py --states-dir "/path/to/data" --tag "dataset_name" --backend supabase
+python3 imports/resilient_importer.py --states-dir "/path/to/data" --tag "dataset_name"
 ```
 
 ## Key Files to Know
@@ -100,13 +91,11 @@ python3 imports/resilient_importer.py --states-dir "/path/to/data" --tag "datase
 ```bash
 # Import state searches with images (recommended)
 make import_scrape_states                    # Supabase backend
-make import_scrape_states_local              # PostgreSQL backend
 
 # Direct usage with options
 python3 imports/resilient_importer.py \
     --states-dir "/path/to/data" \
     --tag "Aug-04-scrape" \
-    --backend supabase \
     --batch-size 25 \
     --max-workers 16 \
     --debug-log
@@ -219,7 +208,7 @@ name,address,city,state,zip,state_licenses
 - Use lazy scoring
 - Cache results in session
 - Use `python setup.py` for new database setup
-- Apply migrations via `migrations/migrate.py` for PostgreSQL
+- Use `migrations/migrate.py` for Supabase schema documentation and verification
 - Use consolidated SQL file for Supabase setup
 
 ❌ DON'T:

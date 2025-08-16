@@ -1,11 +1,9 @@
 # PharmChecker Makefile
 # Convenient commands for development and testing
 
-# Backend configuration - Supabase only
-BACKEND := supabase
-PYTHON_BACKEND_ARG := --backend supabase
+# Supabase configuration
 
-.PHONY: help clean clean_states import_test_states import_test_states2 clean_all setup status migrate backend_info
+.PHONY: help clean import_test_states import_test_states2 clean_all setup status migrate backend_info
 
 # Default target
 help:
@@ -18,7 +16,6 @@ help:
 	@echo ""
 	@echo "Database Management:"
 	@echo "  clean              - Remove all records from datasets, search_results, pharmacies, validated tables"
-	@echo "  clean_states        - Remove all search data (preserves pharmacies)"
 	@echo "  clean_all          - Full database reset and setup"
 	@echo "  migrate            - Run database schema migrations"
 	@echo "  migrate_merge      - Migrate to merged search_results table"
@@ -41,30 +38,24 @@ help:
 	@echo "  test               - Run import tests"
 	@echo ""
 	@echo "Examples:"
-	@echo "  make clean_states import_test_states  # Clean and import baseline"
+	@echo "  make clean import_test_states         # Clean and import baseline"
 	@echo "  make status                           # Check current data"
 	@echo "  make import_sample_data              # Import all test datasets"
 
 # Clean all data tables (preserves schema)
 clean:
 	@echo "🧹 Cleaning all data tables (datasets, search_results, pharmacies, validated)..."
-	@python3 clean_data.py $(PYTHON_BACKEND_ARG)
+	@python3 clean_data.py
 
 # Show backend configuration
 backend_info:
 	@echo "📡 Supabase Configuration"
 	@echo "========================"
-	@echo "Active backend: $(BACKEND)"
-	@echo "Python args: $(PYTHON_BACKEND_ARG)"
 	@echo ""
 	@echo "🌐 Supabase Configuration:"
 	@. ./.env 2>/dev/null && echo "  SUPABASE_URL: $${SUPABASE_URL:-Not set}" || echo "  SUPABASE_URL: Not set"
 	@. ./.env 2>/dev/null && [ -n "$${SUPABASE_SERVICE_KEY}" ] && echo "  SUPABASE_SERVICE_KEY: Set (hidden)" || echo "  SUPABASE_SERVICE_KEY: Not set"
 
-# Clean search data only (preserve pharmacies)
-clean_states:
-	@echo "🧹 Cleaning search database..."
-	@python3 clean_search_db.py $(PYTHON_BACKEND_ARG)
 
 # Import states_baseline data  
 import_test_states:
@@ -72,7 +63,6 @@ import_test_states:
 	@python3 imports/resilient_importer.py \
 		--states-dir data/states_baseline \
 		--tag states_baseline \
-		$(PYTHON_BACKEND_ARG) \
 		--created-by makefile_user \
 		--description "states_baseline test data" \
 		--max-workers 8 \
@@ -84,7 +74,6 @@ import_scrape_states:
 	@python3 imports/resilient_importer.py \
 		--states-dir /home/eric/ai/pharmchecker/data/2025-08-04 \
 		--tag Aug-04-scrape \
-		$(PYTHON_BACKEND_ARG) \
 		--created-by makefile_user \
 		--description "small scrape FL MI NY PA" \
 		--max-workers 16 \
@@ -101,8 +90,7 @@ from pathlib import Path; \
 from dotenv import load_dotenv; \
 load_dotenv(); \
 from imports.states import StateImporter; \
-backend = '$(BACKEND)'; \
-importer = StateImporter(backend=backend); \
+importer = StateImporter(); \
 success = importer.import_directory('data/states_baseline2', created_by='makefile_user', description='states_baseline2 test data with Empower'); \
 print('✅ Import successful!' if success else '❌ Import failed!')"
 
@@ -112,7 +100,6 @@ import_pharmacies:
 	@python3 -m imports.api_importer pharmacies \
 		data/pharmacies_new.csv \
 		pharmacies_baseline \
-		$(PYTHON_BACKEND_ARG) \
 		--created-by makefile_user \
 		--description "Converted pharmacy test data" \
 
@@ -121,7 +108,6 @@ import_pharmacy_rows:
 	@python3 -m imports.api_importer pharmacies \
 		temp/pharmacies.csv \
 		pharmacy_rows \
-		$(PYTHON_BACKEND_ARG) \
 		--created-by makefile_user \
 		--description "Converted pharmacy test data" \
 
@@ -134,7 +120,6 @@ import_pharmacies_sample_data:
 	@python3 -m imports.api_importer pharmacies \
 		data/pharmacies_new.csv \
 		pharmacies_sample_data \
-		$(PYTHON_BACKEND_ARG) \
 		--created-by makefile_user \
 		--description "Pharmacy sample data for unit testing" \
 
@@ -144,7 +129,6 @@ import_states_sample_data:
 	@python3 -m imports.api_importer states \
 		data/states_baseline \
 		states_sample_data \
-		$(PYTHON_BACKEND_ARG) \
 		--created-by makefile_user \
 		--description "States sample data for unit testing" \
 
@@ -154,14 +138,13 @@ import_validated_sample_data:
 	@python3 -m imports.api_importer validated \
 		data/validated_sample_data.csv \
 		validated_sample_data \
-		$(PYTHON_BACKEND_ARG) \
 		--created-by makefile_user \
 		--description "Validated sample data for unit testing" \
 # Database status
 status:
-	@echo "📊 Database Status ($(BACKEND))"
+	@echo "📊 Database Status (Supabase)"
 	@echo "================================"
-	@python3 show_status.py $(PYTHON_BACKEND_ARG)
+	@python3 show_status.py
 
 # Full database setup
 setup:
@@ -171,7 +154,7 @@ setup:
 # Clean everything and rebuild
 clean_all:
 	@echo "🗑️ Full database reset..."
-	@python3 -c "import os; from dotenv import load_dotenv; load_dotenv(); import psycopg2; conn = psycopg2.connect(host=os.getenv('DB_HOST', 'localhost'), port=int(os.getenv('DB_PORT', 5432)), database=os.getenv('DB_NAME', 'pharmchecker'), user=os.getenv('DB_USER', 'postgres'), password=os.getenv('DB_PASSWORD')); cur = conn.cursor(); tables = ['search_results', 'images', 'match_scores', 'validated_overrides', 'pharmacies', 'datasets', 'app_users']; [cur.execute(f'TRUNCATE TABLE {table} RESTART IDENTITY CASCADE') or print(f'  Cleared {table}') for table in tables]; conn.commit(); conn.close(); print('✅ Database cleared')"
+	@python3 clean_data.py
 	@make setup
 
 # Run basic import tests
@@ -184,7 +167,7 @@ test:
 	@echo "✅ Test complete!"
 
 # Quick clean and reload workflow
-reload: clean_states import_test_states
+reload: clean import_test_states
 
 # Run database migrations
 migrate:
@@ -202,4 +185,4 @@ reset_merge:
 	@python3 reset_for_merge.py
 
 # Development workflow - clean, import both datasets, show status
-dev: backend_info clean_states import_pharmacies import_test_states import_test_states2 status
+dev: backend_info clean import_pharmacies import_test_states import_test_states2 status

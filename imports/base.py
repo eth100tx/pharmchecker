@@ -4,43 +4,28 @@ Provides shared database functionality for all importers
 """
 import logging
 from typing import Dict, Any, List, Tuple, Optional
-from .db_adapter import DatabaseAdapter, get_default_adapter, create_adapter
+from .db_adapter import SupabaseAdapter, get_default_adapter
 
 class BaseImporter:
     """Base class for all PharmChecker data importers"""
     
-    def __init__(self, db_adapter: Optional[DatabaseAdapter] = None, backend: str = None, conn_params: Optional[Dict[str, Any]] = None):
+    def __init__(self, db_adapter: Optional[SupabaseAdapter] = None):
         """
         Initialize base importer
         
         Args:
-            db_adapter: Database adapter instance. If None, creates default adapter.
-            backend: Backend type ('postgresql' or 'supabase'). Used if db_adapter is None.
-            conn_params: Database connection parameters. Used for PostgreSQL backend.
+            db_adapter: Supabase adapter instance. If None, creates default adapter.
         """
         if db_adapter is not None:
             self.db = db_adapter
-        elif backend is not None:
-            if backend.lower() == 'postgresql':
-                self.db = create_adapter("postgresql", conn_params=conn_params)
-            else:
-                self.db = create_adapter(backend)
         else:
             self.db = get_default_adapter()
             
         self.logger = logging.getLogger(self.__class__.__name__)
         
         # Establish connection
-        try:
-            if not self.db.connect():
-                raise Exception("Failed to connect to database")
-        except NotImplementedError as e:
-            # For Supabase, we expect this - it should use the unified client instead
-            if backend and backend.lower() == 'supabase':
-                self.logger.warning("Supabase operations should use unified client, not direct importer")
-                raise Exception("Use unified client for Supabase operations") from e
-            else:
-                raise
+        if not self.db.connect():
+            raise Exception("Failed to connect to Supabase")
         
     def __enter__(self):
         """Context manager entry"""

@@ -1,190 +1,17 @@
 """
-Database adapter interface for PharmChecker imports
-Provides unified interface for both PostgreSQL and Supabase backends
+Database adapter for PharmChecker imports
+Provides Supabase backend interface for data operations
 """
 import os
 import logging
-from abc import ABC, abstractmethod
 from typing import Dict, Any, List, Tuple, Optional
-import psycopg2
-from psycopg2.extras import execute_values
 from dotenv import load_dotenv
 
 # Load environment variables
 load_dotenv()
 
 
-class DatabaseAdapter(ABC):
-    """Abstract base class for database adapters"""
-    
-    @abstractmethod
-    def connect(self) -> bool:
-        """Establish database connection"""
-        pass
-    
-    @abstractmethod
-    def close(self):
-        """Close database connection"""
-        pass
-    
-    @abstractmethod
-    def execute_query(self, query: str, params: Tuple = None) -> List[Tuple]:
-        """Execute a SELECT query and return results"""
-        pass
-    
-    @abstractmethod
-    def execute_one(self, query: str, params: Tuple = None) -> Optional[Tuple]:
-        """Execute a SELECT query and return first result"""
-        pass
-    
-    @abstractmethod
-    def execute_statement(self, statement: str, params: Tuple = None) -> int:
-        """Execute an INSERT/UPDATE/DELETE statement"""
-        pass
-    
-    @abstractmethod
-    def batch_insert(self, table: str, columns: List[str], data: List[Tuple], 
-                    batch_size: int = 1000, on_conflict: str = None) -> int:
-        """Batch insert data with error handling"""
-        pass
-    
-    @abstractmethod
-    def commit(self):
-        """Commit current transaction"""
-        pass
-    
-    @abstractmethod
-    def rollback(self):
-        """Rollback current transaction"""
-        pass
-
-
-class PostgreSQLAdapter(DatabaseAdapter):
-    """PostgreSQL database adapter using psycopg2"""
-    
-    def __init__(self, conn_params: Optional[Dict[str, Any]] = None):
-        """
-        Initialize PostgreSQL adapter
-        
-        Args:
-            conn_params: Database connection parameters. If None, uses config.
-        """
-        if conn_params is None:
-            from config import get_db_config
-            conn_params = get_db_config()
-            
-        self.conn_params = conn_params
-        self.conn = None
-        self.logger = logging.getLogger(self.__class__.__name__)
-    
-    def connect(self) -> bool:
-        """Establish database connection"""
-        try:
-            self.conn = psycopg2.connect(**self.conn_params)
-            return True
-        except Exception as e:
-            self.logger.error(f"Failed to connect to PostgreSQL: {e}")
-            return False
-    
-    def close(self):
-        """Close database connection"""
-        if self.conn:
-            self.conn.close()
-            self.conn = None
-    
-    def execute_query(self, query: str, params: Tuple = None) -> List[Tuple]:
-        """Execute a SELECT query and return results"""
-        with self.conn.cursor() as cur:
-            cur.execute(query, params)
-            return cur.fetchall()
-    
-    def execute_one(self, query: str, params: Tuple = None) -> Optional[Tuple]:
-        """Execute a SELECT query and return first result"""
-        with self.conn.cursor() as cur:
-            cur.execute(query, params)
-            return cur.fetchone()
-    
-    def execute_statement(self, statement: str, params: Tuple = None) -> int:
-        """Execute an INSERT/UPDATE/DELETE statement"""
-        with self.conn.cursor() as cur:
-            cur.execute(statement, params)
-            return cur.rowcount
-    
-    def batch_insert(self, table: str, columns: List[str], data: List[Tuple], 
-                    batch_size: int = 1000, on_conflict: str = None) -> int:
-        """
-        Batch insert data with error handling
-        
-        Args:
-            table: Target table name
-            columns: List of column names
-            data: List of tuples containing row data
-            batch_size: Number of rows to insert per batch
-            on_conflict: Optional ON CONFLICT clause (e.g., "DO NOTHING")
-        
-        Returns:
-            Number of rows affected
-        """
-        if not data:
-            return 0
-            
-        total_inserted = 0
-        
-        # Build the INSERT query
-        cols_str = ", ".join(columns)
-        placeholders = ", ".join(["%s"] * len(columns))
-        query = f"INSERT INTO {table} ({cols_str}) VALUES ({placeholders})"
-        
-        if on_conflict:
-            query += f" {on_conflict}"
-        
-        # Process in batches
-        for i in range(0, len(data), batch_size):
-            batch = data[i:i + batch_size]
-            
-            try:
-                with self.conn.cursor() as cur:
-                    if len(batch) == 1:
-                        # Single row insert
-                        cur.execute(query, batch[0])
-                        total_inserted += cur.rowcount
-                    else:
-                        # Batch insert using execute_values
-                        template = f"({placeholders})"
-                        execute_values(
-                            cur, 
-                            f"INSERT INTO {table} ({cols_str}) VALUES %s {on_conflict if on_conflict else ''}",
-                            batch,
-                            template=template
-                        )
-                        total_inserted += cur.rowcount
-                        
-            except Exception as e:
-                self.logger.error(f"Error in batch insert: {e}")
-                # Try individual inserts for this batch
-                for row in batch:
-                    try:
-                        with self.conn.cursor() as cur:
-                            cur.execute(query, row)
-                            total_inserted += cur.rowcount
-                    except Exception as row_err:
-                        self.logger.debug(f"Failed to insert row: {row_err}")
-                        continue
-        
-        return total_inserted
-    
-    def commit(self):
-        """Commit current transaction"""
-        if self.conn:
-            self.conn.commit()
-    
-    def rollback(self):
-        """Rollback current transaction"""
-        if self.conn:
-            self.conn.rollback()
-
-
-class SupabaseAdapter(DatabaseAdapter):
+class SupabaseAdapter:
     """Supabase database adapter using Supabase Python client"""
     
     def __init__(self):
@@ -323,7 +150,7 @@ class SupabaseAdapter(DatabaseAdapter):
         # Supabase REST API doesn't have explicit transactions
         pass
     
-    # Additional helper methods for Supabase-specific operations
+    # Supabase-specific helper methods
     def get_dataset_id(self, kind: str, tag: str) -> Optional[int]:
         """Get dataset ID by kind and tag"""
         if not self.client:
@@ -359,32 +186,16 @@ class SupabaseAdapter(DatabaseAdapter):
             return None
 
 
-def create_adapter(backend: str = "postgresql", **kwargs) -> DatabaseAdapter:
+def create_adapter() -> SupabaseAdapter:
     """
-    Factory function to create database adapter
-    
-    Args:
-        backend: 'postgresql' or 'supabase'
-        **kwargs: Additional configuration options
+    Factory function to create Supabase database adapter
     
     Returns:
-        DatabaseAdapter instance
+        SupabaseAdapter instance
     """
-    if backend.lower() == "supabase":
-        return SupabaseAdapter()
-    elif backend.lower() == "postgresql":
-        return PostgreSQLAdapter(kwargs.get('conn_params'))
-    else:
-        raise ValueError(f"Unsupported backend: {backend}")
+    return SupabaseAdapter()
 
 
-def get_default_adapter() -> DatabaseAdapter:
-    """Get default database adapter based on environment configuration"""
-    # Check if Supabase is configured and preferred
-    supabase_url = os.getenv('SUPABASE_URL')
-    use_cloud_db = os.getenv('USE_CLOUD_DB', '').lower() in ('true', '1', 'yes')
-    
-    if supabase_url and use_cloud_db:
-        return create_adapter("supabase")
-    else:
-        return create_adapter("postgresql")
+def get_default_adapter() -> SupabaseAdapter:
+    """Get default Supabase database adapter"""
+    return create_adapter()
