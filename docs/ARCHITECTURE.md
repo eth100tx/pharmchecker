@@ -60,10 +60,13 @@ Computed address matching scores:
 - Cached permanently once calculated
 
 #### `validated_overrides`
-Manual validation records:
-- Snapshot of search result at validation time
-- Override type: 'present' (confirmed) or 'empty' (no license)
-- Audit fields (who, when, why)
+Manual validation records with complete search result snapshots:
+- **Full snapshot capture**: All search result fields preserved at validation time
+- **Change detection**: Enables detection when search results change after validation
+- **Override types**: 'present' (confirmed license) or 'empty' (no valid license)
+- **Audit trail**: Complete who/when/why tracking with timestamps
+- **Schema fields**: 16 total fields including license_status, license_name, address, city, state, zip, dates, etc.
+- **Export/Import**: Full round-trip CSV export/import with data integrity validation
 
 ### Key Database Function
 

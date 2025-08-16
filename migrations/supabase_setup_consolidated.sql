@@ -103,6 +103,7 @@ CREATE TABLE IF NOT EXISTS validated_overrides (
   -- Snapshot of search_results fields at validation time
   license_status   TEXT,
   license_name     TEXT,
+  license_type     TEXT,              -- Type from JSON: "Pharmacy Special Non-Resident", etc.
   address          TEXT,
   city             TEXT,
   state            TEXT,

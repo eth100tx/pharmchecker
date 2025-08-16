@@ -1,4 +1,2 @@
-pharmacy_name,state_code,override_type,reason,validated_by
-"Belmar","FL","present","License found and verified","test_user"
-"Belmar","PA","empty","No license found in PA database","test_user"
-"Capitol Drugs","FL","present","Active license confirmed","test_user"
+pharmacy_name,state_code,license_number,license_status,license_name,address,city,state,zip,issue_date,expiration_date,result_status,override_type,reason,validated_by,validated_at
+Beaker,FL,PH32481,Clear/,Beaker Pharmacy,7810 Eldorado Pkwy,Suite 200 MCKINNEY,TX,75070,2019-12-12,2027-02-28,found,present,GUI validation toggle - present,gui_user,2025-08-16T13:27:34.970176

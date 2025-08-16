@@ -149,9 +149,19 @@ Default view filters to show only pharmacy-state combinations with search data. 
 
 ## Testing Requirements
 
-Maintain sn used system tests:
+### System Tests
 1. Run `python system_test.py` - Must show "✅ PASS"
 2. Verify GUI loads: `streamlit run app.py`
+
+### Export/Import Tests
+3. Run `python unit_tests/test_export_import.py` - Validates round-trip data integrity
+4. Test validation import: `python -m imports.api_importer validated data/validated_sample_data.csv test_tag`
+
+### Validation System Tests
+- **Full Schema Capture**: Validation records capture complete search result snapshots (16 fields)
+- **Round-trip Testing**: Export → Import → Verify data integrity maintained
+- **Field Mapping**: Correct handling of result_address→address, result_city→city, etc.
+- **Change Detection**: Validates that search result changes after validation are detectable
 
 ## Import Data Formats
 
@@ -179,6 +189,17 @@ name,address,city,state,zip,state_licenses
   }]
 }
 ```
+
+### Validation CSV
+```csv
+pharmacy_name,state_code,license_number,license_status,license_name,address,city,state,zip,issue_date,expiration_date,result_status,override_type,reason,validated_by,validated_at
+"Pharmacy A","FL","FL12345","Active","Pharmacy A LLC","123 Main St","Orlando","FL","32801","2020-01-01","2025-12-31","Valid","present","Manual validation","gui_user","2024-01-15T10:00:00Z"
+```
+
+**Key Fields:**
+- **Core**: pharmacy_name, state_code, license_number, override_type
+- **Snapshot**: All search result fields captured at validation time
+- **Audit**: reason, validated_by, validated_at for compliance tracking
 
 
 ## Recent Important Changes

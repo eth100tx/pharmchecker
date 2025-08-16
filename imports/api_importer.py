@@ -201,8 +201,8 @@ class APIImporter:
             df = pd.read_csv(csv_path)
             print(f"📂 Loaded {len(df)} validated records from {csv_path}")
             
-            # Validate required columns
-            required_columns = ['pharmacy_name', 'search_state', 'override_type']
+            # Validate required columns - use state_code which is the actual column name
+            required_columns = ['pharmacy_name', 'state_code', 'override_type']
             missing_columns = [col for col in required_columns if col not in df.columns]
             if missing_columns:
                 raise ValueError(f"Missing required columns: {missing_columns}")
@@ -216,16 +216,31 @@ class APIImporter:
             
             for index, row in df.iterrows():
                 try:
+                    # Create complete validated record with snapshot fields
                     validated_data = {
                         'dataset_id': dataset_id,
                         'pharmacy_name': row['pharmacy_name'],
-                        'search_state': row['search_state'],
+                        'state_code': row['state_code'],  # Use state_code, not search_state
+                        'license_number': row.get('license_number', ''),
                         'override_type': row['override_type'],
                         'reason': row.get('reason'),
-                        'notes': row.get('notes'),
-                        'validated_by': row.get('validated_by', created_by),
-                        'validated_at': row.get('validated_at', datetime.now().isoformat())
+                        'validated_by': row.get('validated_by', created_by or 'api_importer'),
+                        'validated_at': row.get('validated_at', datetime.now().isoformat()),
+                        
+                        # Snapshot fields from search results
+                        'license_status': row.get('license_status'),
+                        'license_name': row.get('license_name'),
+                        'address': row.get('address'),
+                        'city': row.get('city'), 
+                        'state': row.get('state'),
+                        'zip': row.get('zip'),
+                        'issue_date': row.get('issue_date'),
+                        'expiration_date': row.get('expiration_date'),
+                        'result_status': row.get('result_status')
                     }
+                    
+                    # Clean up None values and empty strings for optional fields
+                    validated_data = {k: v for k, v in validated_data.items() if v is not None and v != ''}
                     
                     response = self.session.post(f"{self.api_url}/validated_overrides", json=validated_data)
                     response.raise_for_status()

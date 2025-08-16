@@ -14,8 +14,6 @@ import logging
 
 # Add project root to path
 sys.path.append(os.path.dirname(os.path.abspath(__file__)))
-# Add API POC client to path
-sys.path.append(os.path.join(os.path.dirname(os.path.abspath(__file__)), 'api_poc', 'gui'))
 
 # Configure logger
 logger = logging.getLogger(__name__)
@@ -32,7 +30,7 @@ from utils.display import (
 from utils.auth import get_auth_manager, get_user_context, require_auth
 from utils.session import auto_restore_dataset_selection, save_dataset_selection
 
-# Import comprehensive results validation from API POC
+# Import comprehensive results validation
 from components.comprehensive_results import validate_comprehensive_results
 
 # Page configuration

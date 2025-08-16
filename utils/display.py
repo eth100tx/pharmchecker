@@ -1059,21 +1059,26 @@ def display_simple_validation_controls(result: pd.Series, datasets: Dict, result
     )
     
     if validated != is_record_validated:
+        # Get client from session state
+        client = st.session_state.get('api_client')
         if license_number:
             # For records with license numbers, validate as present
             toggle_validation_simple(pharmacy_name, search_state, license_number, 
-                            'present' if validated else 'remove')
+                            'present' if validated else 'remove', client=client, result_data=result)
         else:
             # For empty records, validate as empty
             toggle_validation_simple(pharmacy_name, search_state, '', 
-                            'empty' if validated else 'remove')
+                            'empty' if validated else 'remove', client=client, result_data=result)
 
-def toggle_validation_simple(pharmacy_name: str, state_code: str, license_number: str, action: str):
+def toggle_validation_simple(pharmacy_name: str, state_code: str, license_number: str, action: str, client=None, result_data=None):
     """Simple validation toggle - API-based operation + reload"""
     try:
-        # Use API client instead of direct SQL
-        from app import get_client
-        client = get_client()
+        # Use provided client or get from session state
+        if client is None:
+            client = st.session_state.get('api_client')
+            if client is None:
+                st.error("API client not available")
+                return
         
         # Get current dataset info
         loaded_tags = st.session_state.get('loaded_tags', {})
@@ -1119,6 +1124,20 @@ def toggle_validation_simple(pharmacy_name: str, state_code: str, license_number
             
         # Perform API operation
         if action in ['present', 'empty']:
+            # Prepare search result snapshot if result data is available
+            search_result_snapshot = None
+            if result_data is not None:
+                # Extract snapshot fields from result data - use comprehensive results field names
+                search_result_snapshot = {}
+                snapshot_fields = [
+                    'license_status', 'license_name', # 'license_type', # TODO: Add column to DB first
+                    'result_address', 'result_city', 'result_state', 'result_zip', 
+                    'issue_date', 'expiration_date', 'result_status'
+                ]
+                for field in snapshot_fields:
+                    if field in result_data:
+                        search_result_snapshot[field] = result_data[field]
+            
             result = client.create_validation_record(
                 dataset_id=dataset_id,
                 pharmacy_name=pharmacy_name,
@@ -1126,7 +1145,8 @@ def toggle_validation_simple(pharmacy_name: str, state_code: str, license_number
                 license_number=license_number if action == 'present' else '',
                 override_type=action,
                 reason=f"GUI validation toggle - {action}",
-                validated_by='gui_user'
+                validated_by='gui_user',
+                search_result_snapshot=search_result_snapshot
             )
             success = result.get('success')
             if not success:
@@ -1147,7 +1167,7 @@ def toggle_validation_simple(pharmacy_name: str, state_code: str, license_number
         
         if success:
             # FULL RELOAD - no cache patching needed
-            reload_comprehensive_results()
+            reload_comprehensive_results(client=client)
             st.rerun()
                 
     except Exception as e:
@@ -1190,7 +1210,8 @@ def get_validation_controls(row: pd.Series, result_idx: int):
         
         if validated != is_present_validated:
             action = 'present' if validated else 'remove'
-            toggle_validation_simple(pharmacy_name, search_state, license_number, action)
+            client = st.session_state.get('api_client')
+            toggle_validation_simple(pharmacy_name, search_state, license_number, action, client=client, result_data=row)
     
     # Empty validation toggle  
     is_empty_validated = (override_type == 'empty')
@@ -1203,13 +1224,17 @@ def get_validation_controls(row: pd.Series, result_idx: int):
     
     if validated_empty != is_empty_validated:
         action = 'empty' if validated_empty else 'remove'
-        toggle_validation_simple(pharmacy_name, search_state, '', action)
+        client = st.session_state.get('api_client')
+        toggle_validation_simple(pharmacy_name, search_state, '', action, client=client, result_data=row)
 
-def reload_comprehensive_results():
+def reload_comprehensive_results(client=None):
     """Reload comprehensive results with fresh validation data"""
-    # Use API client instead of direct database manager
-    from app import get_client
-    client = get_client()
+    # Use provided client or get from session state
+    if client is None:
+        client = st.session_state.get('api_client')
+        if client is None:
+            st.error("API client not available")
+            return
     
     # Get tags from selected_datasets (which includes newly created validation datasets)
     selected_datasets = st.session_state.get('selected_datasets', {})
@@ -1244,7 +1269,6 @@ def reload_comprehensive_results():
 
 def display_detailed_validation_controls(result: pd.Series, datasets: Dict, result_idx: int) -> None:
     """Display reactive validation controls with instant updates"""
-    import streamlit as st
     
     pharmacy_name = result.get('search_name', '') or result.get('pharmacy_name', '')
     search_state = result.get('search_state', '')
@@ -1449,8 +1473,6 @@ def display_detailed_validation_controls(result: pd.Series, datasets: Dict, resu
 
 def display_validation_snapshot_section(pharmacy_name: str, search_state: str, license_number: str, current_result: pd.Series) -> None:
     """Simple validation display - just dump both records with their IDs"""
-    import streamlit as st
-    import pandas as pd
     
     # Show validation snapshot comparison
     
@@ -1570,9 +1592,11 @@ def handle_validation_toggle(result: pd.Series, datasets: Dict, action: str) -> 
     license_num = result.get('license_number', '') or ''
     
     try:
-        # Use API client instead of direct SQL
-        from app import get_client
-        client = get_client()
+        # Use provided client or get from session state
+        client = st.session_state.get('api_client')
+        if client is None:
+            st.error("API client not available")
+            return False
         
         if action == 'present':
             # Determine dataset to use
@@ -1618,7 +1642,18 @@ def handle_validation_toggle(result: pd.Series, datasets: Dict, action: str) -> 
                     st.error(f"Validation dataset '{validated_tag}' not found")
                     return False
             
-            # Create validation record via API
+            # Create validation record via API with snapshot
+            # Prepare search result snapshot
+            search_result_snapshot = {}
+            snapshot_fields = [
+                'license_status', 'license_name', 'license_type', 'result_address', 
+                'result_city', 'result_state', 'result_zip', 'issue_date', 
+                'expiration_date', 'result_status'
+            ]
+            for field in snapshot_fields:
+                if field in result:
+                    search_result_snapshot[field] = result[field]
+            
             result = client.create_validation_record(
                 dataset_id=dataset_id,
                 pharmacy_name=pharmacy_name,
@@ -1626,14 +1661,15 @@ def handle_validation_toggle(result: pd.Series, datasets: Dict, action: str) -> 
                 license_number=license_num,
                 override_type='present',
                 reason=f"Manual validation via GUI - marked as present",
-                validated_by='gui_user'
+                validated_by='gui_user',
+                search_result_snapshot=search_result_snapshot
             )
             
             if result.get('success'):
                 st.success(f"✅ Validated {pharmacy_name} - {state} - {license_num} as PRESENT")
                 
                 # Reload comprehensive results to include the new validation data
-                reload_comprehensive_results()
+                reload_comprehensive_results(client=client)
                 return True
             else:
                 st.error(f"Failed to create validation record: {result.get('error', 'Unknown error')}")
@@ -1683,7 +1719,18 @@ def handle_validation_toggle(result: pd.Series, datasets: Dict, action: str) -> 
                     st.error(f"Validation dataset '{validated_tag}' not found")
                     return False
             
-            # Create validation record via API
+            # Create validation record via API with snapshot
+            # Prepare search result snapshot
+            search_result_snapshot = {}
+            snapshot_fields = [
+                'license_status', 'license_name', 'license_type', 'result_address', 
+                'result_city', 'result_state', 'result_zip', 'issue_date', 
+                'expiration_date', 'result_status'
+            ]
+            for field in snapshot_fields:
+                if field in result:
+                    search_result_snapshot[field] = result[field]
+            
             result = client.create_validation_record(
                 dataset_id=dataset_id,
                 pharmacy_name=pharmacy_name,
@@ -1691,14 +1738,15 @@ def handle_validation_toggle(result: pd.Series, datasets: Dict, action: str) -> 
                 license_number='',  # Empty for 'empty' validations
                 override_type='empty',
                 reason=f"Manual validation via GUI - marked as empty",
-                validated_by='gui_user'
+                validated_by='gui_user',
+                search_result_snapshot=search_result_snapshot
             )
             
             if result.get('success'):
                 st.success(f"✅ Validated {pharmacy_name} - {state} as EMPTY")
                 
                 # Reload comprehensive results to include the new validation data
-                reload_comprehensive_results()
+                reload_comprehensive_results(client=client)
                 return True
             else:
                 st.error(f"Failed to create validation record: {result.get('error', 'Unknown error')}")
@@ -1734,7 +1782,7 @@ def handle_validation_toggle(result: pd.Series, datasets: Dict, action: str) -> 
                 st.success(f"🗑️ Removed validation for {pharmacy_name} - {state} - {license_num}")
                 
                 # Reload comprehensive results to include the updated validation data
-                reload_comprehensive_results()
+                reload_comprehensive_results(client=client)
                 return True
             else:
                 st.warning(f"Failed to remove validation: {result.get('error', 'Unknown error')}")
