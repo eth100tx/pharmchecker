@@ -1,5 +1,5 @@
 """
-Unified API client wrapper for PharmChecker - supports both PostgREST and Supabase
+API client for PharmChecker - Supabase only
 """
 import requests
 import pandas as pd
@@ -11,454 +11,96 @@ from dotenv import load_dotenv
 # Load environment variables
 load_dotenv()
 
-try:
-    from supabase_client import SupabaseClient, test_supabase_available
-    SUPABASE_AVAILABLE = test_supabase_available()
-except ImportError:
-    SUPABASE_AVAILABLE = False
-    SupabaseClient = None
-
-
-class PostgRESTClient:
-    """Client for interacting with PostgREST API"""
-    
-    def __init__(self, base_url: str = "http://localhost:3000"):
-        self.base_url = base_url
-        self.session = requests.Session()
-        self.session.headers.update({
-            'Content-Type': 'application/json',
-            'Accept': 'application/json'
-        })
-    
-    def _request(self, method: str, endpoint: str, params: Dict = None, data: Dict = None) -> requests.Response:
-        """Make HTTP request to PostgREST API"""
-        url = f"{self.base_url}/{endpoint.lstrip('/')}"
-        
-        try:
-            response = self.session.request(
-                method=method,
-                url=url,
-                params=params,
-                json=data if data else None
-            )
-            response.raise_for_status()
-            return response
-        except requests.exceptions.RequestException as e:
-            raise Exception(f"API request failed: {e}")
-    
-    def get_table_data(self, table: str, limit: int = 1000, filters: Dict = None, select: str = None) -> List[Dict]:
-        """Get data from any table"""
-        params = {}
-        
-        if limit:
-            params['limit'] = limit
-        if select:
-            params['select'] = select
-        if filters:
-            params.update(filters)
-        
-        response = self._request('GET', table, params=params)
-        return response.json()
-    
-    def get_datasets(self) -> List[Dict]:
-        """Get all datasets"""
-        return self.get_table_data('datasets', select='*')
-    
-    def get_pharmacies(self, dataset_id: int = None, limit: int = 100) -> List[Dict]:
-        """Get pharmacies, optionally filtered by dataset"""
-        filters = {}
-        if dataset_id:
-            filters['dataset_id'] = f'eq.{dataset_id}'
-        
-        return self.get_table_data('pharmacies', limit=limit, filters=filters)
-    
-    def get_search_results(self, dataset_id: int = None, limit: int = 100) -> List[Dict]:
-        """Get search results, optionally filtered by dataset"""
-        filters = {}
-        if dataset_id:
-            filters['dataset_id'] = f'eq.{dataset_id}'
-        
-        return self.get_table_data('search_results', limit=limit, filters=filters)
-    
-    def get_comprehensive_results(self, states_tag: str, pharmacies_tag: str, validated_tag: str = "") -> List[Dict]:
-        """Call the main comprehensive results RPC function"""
-        data = {
-            'p_states_tag': states_tag,
-            'p_pharmacies_tag': pharmacies_tag,
-            'p_validated_tag': validated_tag if validated_tag else None
-        }
-        
-        response = self._request('POST', 'rpc/get_all_results_with_context', data=data)
-        return response.json()
-    
-    def export_table_to_csv(self, table: str, filename: str, filters: Dict = None) -> str:
-        """Export table data to CSV"""
-        # Get data in CSV format
-        params = filters or {}
-        headers = {'Accept': 'text/csv'}
-        
-        url = f"{self.base_url}/{table}"
-        response = requests.get(url, params=params, headers=headers)
-        response.raise_for_status()
-        
-        with open(filename, 'w') as f:
-            f.write(response.text)
-        
-        return filename
-    
-    def get_table_schema(self) -> Dict:
-        """Get OpenAPI schema for all tables"""
-        response = self._request('GET', '')
-        return response.json()
-    
-    def test_connection(self) -> bool:
-        """Test if API is accessible"""
-        try:
-            response = self._request('GET', '')
-            return response.status_code == 200
-        except:
-            return False
-    
-    def delete_dataset(self, dataset_id: int) -> Dict:
-        """Delete a dataset and all its associated data via PostgREST"""
-        try:
-            # First get dataset info for confirmation
-            dataset_response = self._request('GET', f'datasets?id=eq.{dataset_id}')
-            datasets = dataset_response.json()
-            
-            if not datasets:
-                return {"error": f"Dataset {dataset_id} not found"}
-            
-            dataset = datasets[0]
-            kind = dataset.get('kind', 'unknown')
-            
-            # Delete associated data based on kind (same logic as Supabase)
-            tables_to_clean = []
-            if kind == 'pharmacies':
-                tables_to_clean = [
-                    ('pharmacies', 'dataset_id'),
-                    ('match_scores', 'pharmacies_dataset_id')
-                ]
-            elif kind == 'states':
-                tables_to_clean = [
-                    ('search_results', 'dataset_id'),
-                    ('match_scores', 'states_dataset_id'),
-                    ('images', 'dataset_id')
-                ]
-            elif kind == 'validated':
-                tables_to_clean = [('validated_overrides', 'dataset_id')]
-            
-            # Delete from associated tables first
-            deleted_counts = {}
-            for table, foreign_key in tables_to_clean:
-                try:
-                    delete_response = self._request('DELETE', f'{table}?{foreign_key}=eq.{dataset_id}')
-                    
-                    # Get count from Content-Range header
-                    content_range = delete_response.headers.get('Content-Range', '')
-                    if '/' in content_range:
-                        count = content_range.split('/')[-1]
-                        deleted_counts[table] = count
-                    else:
-                        deleted_counts[table] = "unknown"
-                        
-                except Exception as e:
-                    deleted_counts[table] = f"error: {e}"
-            
-            # Finally delete the dataset itself
-            dataset_delete_response = self._request('DELETE', f'datasets?id=eq.{dataset_id}')
-            
-            if dataset_delete_response.status_code in [204, 200]:
-                return {
-                    "success": True,
-                    "message": f"Dataset '{dataset['tag']}' ({kind}) deleted successfully",
-                    "deleted_counts": deleted_counts
-                }
-            else:
-                return {"error": f"Failed to delete dataset: {dataset_delete_response.text}"}
-                
-        except Exception as e:
-            return {"error": str(e)}
-    
-    def rename_dataset(self, dataset_id: int, new_tag: str) -> Dict:
-        """Rename a dataset tag via PostgREST"""
-        try:
-            # Update the datasets table
-            response = self._request('PATCH', f'datasets?id=eq.{dataset_id}', data={'tag': new_tag})
-            if response.status_code == 204:  # No content = success
-                return {"success": True, "message": f"Dataset renamed to '{new_tag}'"}
-            else:
-                return {"error": f"Failed to rename dataset: {response.text}"}
-        except Exception as e:
-            return {"error": str(e)}
-    
-    def get_table_counts(self, tables: List[str]) -> Dict[str, str]:
-        """Get record counts for multiple tables via PostgREST"""
-        counts = {}
-        for table in tables:
-            try:
-                # Use HEAD request with Prefer header
-                url = f"{self.base_url}/{table}"
-                headers = {'Prefer': 'count=exact'}
-                response = requests.head(url, headers=headers, timeout=10)
-                
-                count_range = response.headers.get('Content-Range', '')
-                if '/' in count_range:
-                    count = count_range.split('/')[-1]
-                    counts[table] = count
-                else:
-                    counts[table] = "Unable to get count"
-            except Exception as e:
-                counts[table] = f"Error: {str(e)[:30]}"
-        return counts
-    
-    def create_validation_record(self, dataset_id: int, record: Dict) -> Dict:
-        """Create a validation record in validated_overrides table"""
-        try:
-            # Ensure dataset_id is included
-            record['dataset_id'] = dataset_id
-            
-            response = self._request('POST', 'validated_overrides', data=[record])
-            return {"success": True, "message": "Validation record created"}
-        except Exception as e:
-            return {"error": str(e)}
-    
-    def delete_validation_record(self, dataset_id: int, pharmacy_name: str, state_code: str, license_number: str = None) -> Dict:
-        """Delete a validation record from validated_overrides table"""
-        try:
-            # Build filter for deletion
-            filters = {
-                'dataset_id': f'eq.{dataset_id}',
-                'pharmacy_name': f'eq.{pharmacy_name}',
-                'state_code': f'eq.{state_code}'
-            }
-            
-            if license_number:
-                filters['license_number'] = f'eq.{license_number}'
-            else:
-                # For empty validations, license_number is empty or null
-                filters['license_number'] = 'is.null'
-            
-            response = self._request('DELETE', 'validated_overrides', params=filters)
-            return {"success": True, "message": "Validation record deleted"}
-        except Exception as e:
-            return {"error": str(e)}
-    
-    def create_dataset(self, kind: str, tag: str, description: str = None, created_by: str = "api_user") -> Dict:
-        """Create a new dataset via PostgREST"""
-        try:
-            # Find unique tag if conflicts exist
-            unique_tag = self._find_unique_tag(kind, tag)
-            
-            record = {
-                'kind': kind,
-                'tag': unique_tag,
-                'description': description,
-                'created_by': created_by
-            }
-            
-            response = self._request('POST', 'datasets', data=[record])
-            
-            # Get the created dataset to return ID
-            created_response = self._request('GET', f'datasets?kind=eq.{kind}&tag=eq.{unique_tag}')
-            datasets = created_response.json()
-            
-            if datasets:
-                dataset_id = datasets[0]['id']
-                return {"success": True, "dataset_id": dataset_id, "tag": unique_tag}
-            else:
-                return {"error": "Dataset created but could not retrieve ID"}
-                
-        except Exception as e:
-            return {"error": str(e)}
-    
-    def _find_unique_tag(self, kind: str, base_tag: str) -> str:
-        """Find a unique tag by adding (2), (3), etc. if conflicts exist"""
-        try:
-            # Check if base tag exists
-            response = self._request('GET', f'datasets?kind=eq.{kind}&tag=eq.{base_tag}')
-            existing = response.json()
-            
-            if not existing:
-                return base_tag
-            
-            # Find next available number
-            counter = 2
-            while True:
-                test_tag = f"{base_tag} ({counter})"
-                response = self._request('GET', f'datasets?kind=eq.{kind}&tag=eq.{test_tag}')
-                existing = response.json()
-                
-                if not existing:
-                    return test_tag
-                counter += 1
-                
-                # Safety limit
-                if counter > 100:
-                    return f"{base_tag} ({counter})"
-                    
-        except Exception:
-            # If we can't check for uniqueness, just return base tag
-            return base_tag
+from supabase_client import SupabaseClient
 
 
 class UnifiedClient:
-    """Unified client that can work with both PostgREST and Supabase"""
+    """Client that works exclusively with Supabase"""
     
-    def __init__(self, prefer_supabase: bool = False):
-        self.prefer_supabase = prefer_supabase
+    def __init__(self):
+        """Initialize Supabase-only client"""
+        self.supabase_client = SupabaseClient()
         
-        # Initialize clients
-        self.postgrest_client = PostgRESTClient()
-        self.supabase_client = SupabaseClient() if SUPABASE_AVAILABLE else None
-        
-        # NO FALLBACK: Use exactly what was requested
-        if prefer_supabase:
-            if not self.supabase_client:
-                raise Exception("Supabase requested but not available (missing dependencies or config)")
-            if not self.supabase_client.test_connection():
-                raise Exception("Supabase requested but connection failed")
-            self.use_supabase = True
-        else:
-            if not self.postgrest_client.test_connection():
-                raise Exception("PostgREST requested but connection failed")
-            self.use_supabase = False
+        # Test connection
+        if not self.supabase_client.test_connection():
+            raise Exception("Supabase connection failed - check SUPABASE_URL and SUPABASE_ANON_KEY")
         
         self.backend_info = {
-            "requested_backend": "supabase" if prefer_supabase else "postgrest",
-            "using_supabase": self.use_supabase,
-            "supabase_available": SUPABASE_AVAILABLE,
-            "postgrest_available": self.postgrest_client.test_connection()
+            "backend": "supabase",
+            "url": self.supabase_client.get_project_url()
         }
     
-    def supabase_available(self) -> bool:
-        """Check if Supabase is available and working"""
-        if not self.supabase_client:
-            return False
-        return self.supabase_client.test_connection()
-    
     def get_backend_info(self) -> Dict:
-        """Get information about available backends"""
+        """Get information about the backend"""
         return self.backend_info.copy()
     
     def test_connection(self) -> bool:
-        """Test connection to active backend"""
-        if self.use_supabase:
-            return self.supabase_client.test_connection()
-        else:
-            return self.postgrest_client.test_connection()
+        """Test connection to Supabase"""
+        return self.supabase_client.test_connection()
     
     def get_datasets(self) -> List[Dict]:
-        """Get datasets from active backend"""
-        if self.use_supabase:
-            return self.supabase_client.get_datasets_supabase()
-        else:
-            return self.postgrest_client.get_datasets()
+        """Get datasets from Supabase"""
+        return self.supabase_client.get_datasets_supabase()
     
     def get_pharmacies(self, dataset_id: int = None, limit: int = 100) -> List[Dict]:
-        """Get pharmacies from active backend"""
-        if self.use_supabase:
-            # Use REST API for Supabase
-            filters = {}
-            if dataset_id:
-                filters['dataset_id'] = f'eq.{dataset_id}'
-            result = self.supabase_client.get_table_data_via_rest('pharmacies', limit=limit, filters=filters)
-            return result if isinstance(result, list) else []
-        else:
-            return self.postgrest_client.get_pharmacies(dataset_id, limit)
+        """Get pharmacies from Supabase"""
+        filters = {}
+        if dataset_id:
+            filters['dataset_id'] = f'eq.{dataset_id}'
+        result = self.supabase_client.get_table_data_via_rest('pharmacies', limit=limit, filters=filters)
+        return result if isinstance(result, list) else []
     
     def get_search_results(self, dataset_id: int = None, limit: int = 100) -> List[Dict]:
-        """Get search results from active backend"""
-        if self.use_supabase:
-            # Use REST API for Supabase
-            filters = {}
-            if dataset_id:
-                filters['dataset_id'] = f'eq.{dataset_id}'
-            result = self.supabase_client.get_table_data_via_rest('search_results', limit=limit, filters=filters)
-            return result if isinstance(result, list) else []
-        else:
-            return self.postgrest_client.get_search_results(dataset_id, limit)
+        """Get search results from Supabase"""
+        filters = {}
+        if dataset_id:
+            filters['dataset_id'] = f'eq.{dataset_id}'
+        result = self.supabase_client.get_table_data_via_rest('search_results', limit=limit, filters=filters)
+        return result if isinstance(result, list) else []
     
     def get_comprehensive_results(self, states_tag: str, pharmacies_tag: str, validated_tag: str = "") -> List[Dict]:
-        """Get comprehensive results from active backend"""
-        if self.use_supabase:
-            return self.supabase_client.get_comprehensive_results_supabase(states_tag, pharmacies_tag, validated_tag)
-        else:
-            return self.postgrest_client.get_comprehensive_results(states_tag, pharmacies_tag, validated_tag)
+        """Get comprehensive results from Supabase"""
+        return self.supabase_client.get_comprehensive_results_supabase(states_tag, pharmacies_tag, validated_tag)
     
     def get_table_data(self, table: str, limit: int = 1000, filters: Dict = None, select: str = None) -> List[Dict]:
         """Get data from any table"""
-        if self.use_supabase:
-            # Use REST API for Supabase
-            result = self.supabase_client.get_table_data_via_rest(table, limit=limit, filters=filters)
-            return result if isinstance(result, list) else []
-        else:
-            return self.postgrest_client.get_table_data(table, limit, filters, select)
-    
-    def switch_backend(self, use_supabase: bool) -> bool:
-        """Switch between Supabase and PostgREST backends
-        
-        Args:
-            use_supabase: True to use Supabase, False to use PostgREST
-            
-        Returns:
-            True if switch was successful, False otherwise
-        """
-        try:
-            if use_supabase and not SUPABASE_AVAILABLE:
-                return False
-            
-            self.prefer_supabase = use_supabase
-            self.use_supabase = use_supabase
-            return True
-        except Exception:
-            return False
+        result = self.supabase_client.get_table_data_via_rest(table, limit=limit, filters=filters)
+        return result if isinstance(result, list) else []
     
     def get_active_backend(self) -> str:
         """Get the name of the active backend"""
-        return "Supabase" if self.use_supabase else "PostgREST (Local)"
+        return "Supabase"
     
     def get_active_api_url(self) -> str:
         """Get the API URL for the active backend"""
-        if self.use_supabase:
-            return f"{self.supabase_client.get_project_url()}/rest/v1" if self.supabase_client else "Not configured"
-        else:
-            return self.postgrest_client.base_url
+        return f"{self.supabase_client.get_project_url()}/rest/v1"
     
     def get_table_schema(self) -> Dict:
-        """Get table schema from active backend"""
-        if self.use_supabase:
-            # For Supabase, we can't get OpenAPI schema easily, so return a simplified version
-            return {
-                "paths": {
-                    "/datasets": {},
-                    "/pharmacies": {},
-                    "/search_results": {},
-                    "/validated_overrides": {},
-                    "/rpc/get_all_results_with_context": {}
-                }
+        """Get table schema from Supabase"""
+        return {
+            "paths": {
+                "/datasets": {},
+                "/pharmacies": {},
+                "/search_results": {},
+                "/validated_overrides": {},
+                "/match_scores": {},
+                "/app_users": {},
+                "/rpc/get_all_results_with_context": {}
             }
-        else:
-            return self.postgrest_client.get_table_schema()
+        }
     
     # Supabase-specific methods
     def get_supabase_info(self) -> Dict:
         """Get Supabase project information"""
-        if not self.supabase_client:
-            return {"error": "Supabase not available"}
-        
         return {
             "project_url": self.supabase_client.get_project_url(),
-            "anon_key": self.supabase_client.get_anon_key()[:20] + "...",  # Truncated for security
+            "anon_key": self.supabase_client.get_anon_key()[:20] + "...",
             "tables": self.supabase_client.list_tables(),
             "migrations": self.supabase_client.list_migrations()
         }
     
     def setup_supabase_database(self) -> Dict:
         """Set up the database schema and functions in Supabase"""
-        if not self.supabase_client:
-            return {"error": "Supabase not available"}
-        
         results = {}
         
         # Set up schema
@@ -473,24 +115,59 @@ class UnifiedClient:
     
     def delete_dataset(self, dataset_id: int) -> Dict:
         """Delete a dataset and all its associated data"""
-        if self.use_supabase:
-            return self.supabase_client.delete_dataset_supabase(dataset_id)
-        else:
-            return self.postgrest_client.delete_dataset(dataset_id)
+        return self.supabase_client.delete_dataset_supabase(dataset_id)
     
     def rename_dataset(self, dataset_id: int, new_tag: str) -> Dict:
         """Rename a dataset tag"""
-        if self.use_supabase:
-            return self.supabase_client.rename_dataset_supabase(dataset_id, new_tag)
-        else:
-            return self.postgrest_client.rename_dataset(dataset_id, new_tag)
+        return self.supabase_client.rename_dataset_supabase(dataset_id, new_tag)
+    
+    def update_table_record(self, table: str, record_id: int, data: Dict) -> Dict:
+        """Update a record in any table"""
+        try:
+            import requests
+            url = f"{self.supabase_client.url}/rest/v1/{table}"
+            
+            headers = self.supabase_client.headers.copy()
+            headers['Prefer'] = 'return=minimal'
+            
+            params = {'id': f'eq.{record_id}'}
+            
+            response = requests.patch(url, 
+                                     headers=headers,
+                                     params=params,
+                                     json=data,
+                                     timeout=10)
+            
+            if response.status_code in [200, 204]:
+                return {"success": True}
+            else:
+                return {"error": f"Update failed: {response.status_code} {response.text}"}
+        except Exception as e:
+            return {"error": str(e)}
+    
+    def delete_table_record(self, table: str, record_id: int) -> Dict:
+        """Delete a record from any table"""
+        try:
+            import requests
+            url = f"{self.supabase_client.url}/rest/v1/{table}"
+            
+            params = {'id': f'eq.{record_id}'}
+            
+            response = requests.delete(url, 
+                                      headers=self.supabase_client.headers,
+                                      params=params,
+                                      timeout=10)
+            
+            if response.status_code in [200, 204]:
+                return {"success": True}
+            else:
+                return {"error": f"Delete failed: {response.status_code} {response.text}"}
+        except Exception as e:
+            return {"error": str(e)}
     
     def get_table_counts(self, tables: List[str]) -> Dict[str, str]:
         """Get record counts for multiple tables"""
-        if self.use_supabase:
-            return self.supabase_client.get_table_counts_supabase(tables)
-        else:
-            return self.postgrest_client.get_table_counts(tables)
+        return self.supabase_client.get_table_counts_supabase(tables)
     
     def _get_dataset_id(self, tag: str, kind: str) -> Optional[int]:
         """Get dataset ID for a tag and kind"""
@@ -509,34 +186,15 @@ class UnifiedClient:
         if not states_id or not pharmacies_id:
             return False
         
-        # Count existing scores via active backend
-        if self.use_supabase:
-            # Use Supabase REST API - just check if any records exist
-            filters = {
-                'states_dataset_id': f'eq.{states_id}',
-                'pharmacies_dataset_id': f'eq.{pharmacies_id}'
-            }
-            result = self.supabase_client.get_table_data_via_rest(
-                'match_scores', limit=1, filters=filters
-            )
-            # If we get any results, scores exist
-            return len(result) > 0 if isinstance(result, list) else False
-        else:
-            # Use PostgREST count
-            try:
-                response = self.postgrest_client._request(
-                    'GET', 'match_scores',
-                    params={
-                        'select': 'count',
-                        'states_dataset_id': f'eq.{states_id}',
-                        'pharmacies_dataset_id': f'eq.{pharmacies_id}'
-                    },
-                    headers={'Prefer': 'count=exact'}
-                )
-                count = response.json()[0]['count']
-                return count > 0
-            except Exception:
-                return False
+        # Check if any scores exist
+        filters = {
+            'states_dataset_id': f'eq.{states_id}',
+            'pharmacies_dataset_id': f'eq.{pharmacies_id}'
+        }
+        result = self.supabase_client.get_table_data_via_rest(
+            'match_scores', limit=1, filters=filters
+        )
+        return len(result) > 0 if isinstance(result, list) else False
     
     def trigger_scoring(self, states_tag: str, pharmacies_tag: str, batch_size: int = 200) -> Dict[str, Any]:
         """Trigger client-side scoring computation for dataset pair"""
@@ -611,7 +269,7 @@ class UnifiedClient:
                 # Create address objects
                 pharmacy_addr = Address(
                     address=pair['pharmacy_address'],
-                    suite=None,  # Suite not typically in pharmacy data
+                    suite=None,
                     city=pair['pharmacy_city'],
                     state=pair['pharmacy_state'],
                     zip=pair['pharmacy_zip']
@@ -619,7 +277,7 @@ class UnifiedClient:
                 
                 result_addr = Address(
                     address=pair['result_address'],
-                    suite=None,  # Suite not typically in search results
+                    suite=None,
                     city=pair['result_city'],
                     state=pair['result_state'],
                     zip=pair['result_zip']
@@ -657,40 +315,23 @@ class UnifiedClient:
             return {'success': True, 'inserted': 0}
         
         try:
-            if self.use_supabase:
-                # Use Supabase REST API to insert
-                import requests
-                url = f"{self.supabase_client.url}/rest/v1/match_scores"
-                
-                # Convert scoring_meta to JSON string for database
-                for score in scores:
-                    if isinstance(score.get('scoring_meta'), dict):
-                        import json
-                        score['scoring_meta'] = json.dumps(score['scoring_meta'])
-                
-                response = requests.post(url, 
-                                       headers=self.supabase_client.headers,
-                                       json=scores,
-                                       timeout=30)
-                
-                if response.status_code in [200, 201]:
-                    return {'success': True, 'inserted': len(scores)}
-                else:
-                    return {'error': f'Insert failed: {response.status_code} {response.text}'}
-            else:
-                # Use PostgREST to insert
-                import json
-                
-                # Convert scoring_meta to JSON string for database
-                for score in scores:
-                    if isinstance(score.get('scoring_meta'), dict):
-                        score['scoring_meta'] = json.dumps(score['scoring_meta'])
-                
-                response = self.postgrest_client._request(
-                    'POST', 'match_scores',
-                    data=scores
-                )
+            import requests
+            url = f"{self.supabase_client.url}/rest/v1/match_scores"
+            
+            # Convert scoring_meta to JSON string for database
+            for score in scores:
+                if isinstance(score.get('scoring_meta'), dict):
+                    score['scoring_meta'] = json.dumps(score['scoring_meta'])
+            
+            response = requests.post(url, 
+                                   headers=self.supabase_client.headers,
+                                   json=scores,
+                                   timeout=30)
+            
+            if response.status_code in [200, 201]:
                 return {'success': True, 'inserted': len(scores)}
+            else:
+                return {'error': f'Insert failed: {response.status_code} {response.text}'}
                 
         except Exception as e:
             return {'error': str(e)}
@@ -704,38 +345,23 @@ class UnifiedClient:
         if not states_id or not pharmacies_id:
             return {'error': 'Dataset IDs not found'}
         
-        if self.use_supabase:
-            # Use Supabase REST API delete
-            try:
-                import requests
-                url = f"{self.supabase_client.url}/rest/v1/match_scores"
-                params = {
-                    'states_dataset_id': f'eq.{states_id}',
-                    'pharmacies_dataset_id': f'eq.{pharmacies_id}'
-                }
-                response = requests.delete(url, 
-                                         headers=self.supabase_client.headers, 
-                                         params=params, 
-                                         timeout=30)
-                if response.status_code in [200, 204]:
-                    return {'success': True, 'message': 'Scores cleared'}
-                else:
-                    return {'error': f'Delete failed: {response.status_code} {response.text}'}
-            except Exception as e:
-                return {'error': str(e)}
-        else:
-            # Use PostgREST delete
-            try:
-                response = self.postgrest_client._request(
-                    'DELETE', 'match_scores',
-                    params={
-                        'states_dataset_id': f'eq.{states_id}',
-                        'pharmacies_dataset_id': f'eq.{pharmacies_id}'
-                    }
-                )
+        try:
+            import requests
+            url = f"{self.supabase_client.url}/rest/v1/match_scores"
+            params = {
+                'states_dataset_id': f'eq.{states_id}',
+                'pharmacies_dataset_id': f'eq.{pharmacies_id}'
+            }
+            response = requests.delete(url, 
+                                     headers=self.supabase_client.headers, 
+                                     params=params, 
+                                     timeout=30)
+            if response.status_code in [200, 204]:
                 return {'success': True, 'message': 'Scores cleared'}
-            except Exception as e:
-                return {'error': str(e)}
+            else:
+                return {'error': f'Delete failed: {response.status_code} {response.text}'}
+        except Exception as e:
+            return {'error': str(e)}
     
     def create_validation_record(self, dataset_id: int, pharmacy_name: str, state_code: str, 
                                license_number: str, override_type: str, reason: str, 
@@ -744,6 +370,7 @@ class UnifiedClient:
         from datetime import datetime
         
         record = {
+            'dataset_id': dataset_id,
             'pharmacy_name': pharmacy_name,
             'state_code': state_code,
             'license_number': license_number or '',
@@ -753,109 +380,93 @@ class UnifiedClient:
             'validated_at': datetime.now().isoformat()
         }
         
-        if self.use_supabase:
-            # Use Supabase REST API
-            try:
-                import requests
-                url = f"{self.supabase_client.url}/rest/v1/validated_overrides"
-                record['dataset_id'] = dataset_id
-                
-                response = requests.post(url, 
-                                       headers=self.supabase_client.headers,
-                                       json=[record],  # Supabase expects array
-                                       timeout=30)
-                
-                if response.status_code in [200, 201]:
-                    return {"success": True, "message": "Validation record created"}
-                else:
-                    return {"error": f"Failed to create validation: {response.status_code} {response.text}"}
-            except Exception as e:
-                return {"error": str(e)}
-        else:
-            # Use PostgREST
-            return self.postgrest_client.create_validation_record(dataset_id, record)
+        try:
+            import requests
+            url = f"{self.supabase_client.url}/rest/v1/validated_overrides"
+            
+            response = requests.post(url, 
+                                   headers=self.supabase_client.headers,
+                                   json=[record],
+                                   timeout=30)
+            
+            if response.status_code in [200, 201]:
+                return {"success": True, "message": "Validation record created"}
+            else:
+                return {"error": f"Failed to create validation: {response.status_code} {response.text}"}
+        except Exception as e:
+            return {"error": str(e)}
     
     def delete_validation_record(self, dataset_id: int, pharmacy_name: str, state_code: str, 
                                license_number: str = None) -> Dict:
         """Delete a validation record via API"""
-        if self.use_supabase:
-            # Use Supabase REST API
-            try:
-                import requests
-                url = f"{self.supabase_client.url}/rest/v1/validated_overrides"
-                
-                params = {
-                    'dataset_id': f'eq.{dataset_id}',
-                    'pharmacy_name': f'eq.{pharmacy_name}',
-                    'state_code': f'eq.{state_code}'
-                }
-                
-                if license_number:
-                    params['license_number'] = f'eq.{license_number}'
-                else:
-                    params['license_number'] = 'is.null'
-                
-                response = requests.delete(url, 
-                                         headers=self.supabase_client.headers,
-                                         params=params,
-                                         timeout=30)
-                
-                if response.status_code in [200, 204]:
-                    return {"success": True, "message": "Validation record deleted"}
-                else:
-                    return {"error": f"Failed to delete validation: {response.status_code} {response.text}"}
-            except Exception as e:
-                return {"error": str(e)}
-        else:
-            # Use PostgREST
-            return self.postgrest_client.delete_validation_record(dataset_id, pharmacy_name, state_code, license_number)
+        try:
+            import requests
+            url = f"{self.supabase_client.url}/rest/v1/validated_overrides"
+            
+            params = {
+                'dataset_id': f'eq.{dataset_id}',
+                'pharmacy_name': f'eq.{pharmacy_name}',
+                'state_code': f'eq.{state_code}'
+            }
+            
+            if license_number:
+                params['license_number'] = f'eq.{license_number}'
+            else:
+                params['license_number'] = 'is.null'
+            
+            response = requests.delete(url, 
+                                     headers=self.supabase_client.headers,
+                                     params=params,
+                                     timeout=30)
+            
+            if response.status_code in [200, 204]:
+                return {"success": True, "message": "Validation record deleted"}
+            else:
+                return {"error": f"Failed to delete validation: {response.status_code} {response.text}"}
+        except Exception as e:
+            return {"error": str(e)}
     
     def create_dataset(self, kind: str, tag: str, description: str = None, created_by: str = "gui_user") -> Dict:
         """Create a new dataset via API"""
-        if self.use_supabase:
-            # Use Supabase REST API
-            try:
-                import requests
+        try:
+            import requests
+            
+            # Find unique tag if conflicts exist
+            unique_tag = self._find_unique_tag(kind, tag)
+            
+            record = {
+                'kind': kind,
+                'tag': unique_tag,
+                'description': description,
+                'created_by': created_by
+            }
+            
+            url = f"{self.supabase_client.url}/rest/v1/datasets"
+            response = requests.post(url, 
+                                   headers=self.supabase_client.headers,
+                                   json=[record],
+                                   timeout=30)
+            
+            if response.status_code in [200, 201]:
+                # Get the created dataset to return ID
+                get_url = f"{self.supabase_client.url}/rest/v1/datasets"
+                params = {'kind': f'eq.{kind}', 'tag': f'eq.{unique_tag}'}
+                get_response = requests.get(get_url, 
+                                          headers=self.supabase_client.headers,
+                                          params=params,
+                                          timeout=30)
                 
-                # Find unique tag if conflicts exist
-                unique_tag = self._find_unique_tag(kind, tag)
+                if get_response.status_code == 200:
+                    datasets = get_response.json()
+                    if datasets:
+                        dataset_id = datasets[0]['id']
+                        return {"success": True, "dataset_id": dataset_id, "tag": unique_tag}
                 
-                record = {
-                    'kind': kind,
-                    'tag': unique_tag,
-                    'description': description,
-                    'created_by': created_by
-                }
-                
-                url = f"{self.supabase_client.url}/rest/v1/datasets"
-                response = requests.post(url, 
-                                       headers=self.supabase_client.headers,
-                                       json=[record],  # Supabase expects array
-                                       timeout=30)
-                
-                if response.status_code in [200, 201]:
-                    # Get the created dataset to return ID
-                    get_url = f"{self.supabase_client.url}/rest/v1/datasets"
-                    params = {'kind': f'eq.{kind}', 'tag': f'eq.{unique_tag}'}
-                    get_response = requests.get(get_url, 
-                                              headers=self.supabase_client.headers,
-                                              params=params,
-                                              timeout=30)
-                    
-                    if get_response.status_code == 200:
-                        datasets = get_response.json()
-                        if datasets:
-                            dataset_id = datasets[0]['id']
-                            return {"success": True, "dataset_id": dataset_id, "tag": unique_tag}
-                    
-                    return {"error": "Dataset created but could not retrieve ID"}
-                else:
-                    return {"error": f"Failed to create dataset: {response.status_code} {response.text}"}
-            except Exception as e:
-                return {"error": str(e)}
-        else:
-            # Use PostgREST
-            return self.postgrest_client.create_dataset(kind, tag, description, created_by)
+                return {"error": "Dataset created but could not retrieve ID"}
+            else:
+                return {"error": f"Failed to create dataset: {response.status_code} {response.text}"}
+        except Exception as e:
+            return {"error": str(e)}
     
     def _find_unique_tag(self, kind: str, base_tag: str) -> str:
         """Find a unique tag by adding (2), (3), etc. if conflicts exist"""
@@ -886,9 +497,9 @@ class UnifiedClient:
             return base_tag
 
 
-def create_client(prefer_supabase: bool = False) -> UnifiedClient:
-    """Factory function to create unified client"""
-    return UnifiedClient(prefer_supabase=prefer_supabase)
+def create_client() -> UnifiedClient:
+    """Factory function to create Supabase-only client"""
+    return UnifiedClient()
 
 
 def datasets_to_dataframe(datasets: List[Dict]) -> pd.DataFrame:

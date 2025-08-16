@@ -34,7 +34,7 @@ def render_api_tester(client):
         "List Pharmacies": "/pharmacies?limit=10", 
         "List Search Results": "/search_results?limit=10",
         "Schema": "/",
-        "Comprehensive Results": "/rpc/get_all_results_with_context?p_states_tag=states_baseline&p_pharmacies_tag=test_pharmacies&p_validated_tag="
+        "Comprehensive Results": "/rpc/get_all_results_with_context?p_states_tag=states_baseline&p_pharmacies_tag=pharmacies_baseline&p_validated_tag="
     }
     
     selected_endpoint = st.selectbox("Select Predefined Endpoint", list(endpoints.keys()))

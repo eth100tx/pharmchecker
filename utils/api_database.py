@@ -21,7 +21,7 @@ except ImportError as e:
     API_CLIENT_AVAILABLE = False
     logging.warning(f"API client not available: {e}")
 
-from config import get_config_summary, use_cloud_database, API_CACHE_TTL, API_RETRY_COUNT
+from config import get_config_summary, API_CACHE_TTL, API_RETRY_COUNT
 
 logger = logging.getLogger(__name__)
 
@@ -45,7 +45,7 @@ class ApiDatabaseManager:
         
         # Initialize API client - fail if it doesn't work
         try:
-            self.client = create_client(prefer_supabase=use_cloud_db)
+            self.client = create_client()
             logger.info(f"API client initialized: {self.client.get_active_backend()}")
         except Exception as e:
             logger.error(f"Failed to initialize API client: {e}")

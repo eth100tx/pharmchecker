@@ -117,7 +117,7 @@ curl "http://localhost:3000/pharmacies?dataset_id=eq.3&limit=10"
 
 ### Call comprehensive results function
 ```bash
-curl "http://localhost:3000/rpc/get_all_results_with_context?p_states_tag=states_baseline&p_pharmacies_tag=test_pharmacies&p_validated_tag="
+curl "http://localhost:3000/rpc/get_all_results_with_context?p_states_tag=states_baseline&p_pharmacies_tag=pharmacies_baseline&p_validated_tag="
 ```
 
 ### Export table as CSV
@@ -155,7 +155,7 @@ if client.switch_backend(use_supabase=True):
 # Get comprehensive results (uses active backend)
 results = client.get_comprehensive_results(
     states_tag="states_baseline",
-    pharmacies_tag="test_pharmacies", 
+    pharmacies_tag="pharmacies_baseline", 
     validated_tag=""
 )
 

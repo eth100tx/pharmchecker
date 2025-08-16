@@ -100,7 +100,7 @@ class APIImporter:
         return self.create_dataset(kind, tag, description, created_by)
     
     def import_pharmacies_csv(self, csv_path: str, tag: str, created_by: str = None,
-                             description: str = None, batch_size: int = 100) -> bool:
+                             description: str = None) -> bool:
         """Import pharmacies from CSV file via API"""
         
         csv_path = Path(csv_path)
@@ -168,28 +168,24 @@ class APIImporter:
             pharmacy = {k: v for k, v in pharmacy.items() if v is not None and v != ''}
             pharmacies.append(pharmacy)
         
-        # Import in batches
-        total_imported = 0
-        for i in range(0, len(pharmacies), batch_size):
-            batch = pharmacies[i:i + batch_size]
-            
+        # Import pharmacies one by one for better error reporting
+        imported_count = 0
+        for i, pharmacy in enumerate(pharmacies):
             try:
-                response = self.session.post(f"{self.api_url}/pharmacies", json=batch)
+                response = self.session.post(f"{self.api_url}/pharmacies", json=[pharmacy])
                 response.raise_for_status()
-                
-                imported_count = len(response.json()) if response.json() else len(batch)
-                total_imported += imported_count
-                print(f"📥 Imported batch {i//batch_size + 1}: {imported_count} pharmacies")
+                imported_count += 1
+                print(f"📥 Imported pharmacy {i+1}/{len(pharmacies)}: {pharmacy['name']}")
                 
             except requests.exceptions.RequestException as e:
-                print(f"❌ Failed to import batch {i//batch_size + 1}: {e}")
+                print(f"❌ Failed to import pharmacy {i+1} ({pharmacy.get('name', 'Unknown')}): {e}")
                 if hasattr(e, 'response') and e.response:
                     print(f"Error details: {e.response.text}")
-                    print(f"First item in failed batch: {json.dumps(batch[0], indent=2)}")
-                return False
-        
-        print(f"✅ Successfully imported {total_imported}/{len(pharmacies)} pharmacies to {self.backend}")
-        return True
+                    print(f"Failed pharmacy data: {json.dumps(pharmacy, indent=2)}")
+                # Continue with other records instead of stopping
+                
+        print(f"✅ Successfully imported {imported_count}/{len(pharmacies)} pharmacies to {self.backend}")
+        return imported_count > 0  # Success if at least one record imported
     
     def import_states_directory(self, states_dir: str, tag: str, created_by: str = None,
                                description: str = None, batch_size: int = 50) -> bool:
@@ -377,8 +373,176 @@ class APIImporter:
             print(f"✅ Successfully imported {total_imported} search results with images to {self.backend}")
         
         return True
+    
+    def import_states_csv(self, csv_path: str, tag: str, created_by: str = None,
+                         description: str = None) -> bool:
+        """Import states search results from CSV file via API"""
         
-        return True
+        csv_path = Path(csv_path)
+        if not csv_path.exists():
+            print(f"❌ CSV file not found: {csv_path}")
+            return False
+        
+        # Create or get dataset for search results
+        dataset_id = self.get_or_create_dataset(
+            kind='states',
+            tag=tag,
+            description=description,
+            created_by=created_by
+        )
+        
+        if not dataset_id:
+            return False
+        
+        try:
+            # Read CSV file
+            df = pd.read_csv(csv_path)
+            print(f"📊 Found {len(df)} records in CSV")
+            
+            # Validate required columns
+            required_cols = ['search_name', 'search_state']
+            missing_cols = [col for col in required_cols if col not in df.columns]
+            if missing_cols:
+                print(f"❌ Missing required columns: {missing_cols}")
+                return False
+            
+            # Convert DataFrame to search results format
+            search_results = []
+            for _, row in df.iterrows():
+                # Convert row to dict and clean up None/NaN values
+                result = {
+                    'dataset_id': dataset_id,
+                    'search_name': row.get('search_name'),
+                    'search_state': row.get('search_state'),
+                    'search_ts': row.get('search_ts'),
+                    'license_number': row.get('license_number'),
+                    'license_status': row.get('license_status'),
+                    'license_name': row.get('license_name'),
+                    'license_type': row.get('license_type'),
+                    'address': row.get('address'),
+                    'city': row.get('city'),
+                    'state': row.get('state'),
+                    'zip': row.get('zip'),
+                    'issue_date': row.get('issue_date'),
+                    'expiration_date': row.get('expiration_date'),
+                    'result_status': row.get('result_status', 'found'),
+                    'meta': row.get('meta'),
+                    'raw': row.get('raw'),
+                    'image_hash': row.get('image_hash')
+                }
+                
+                # Clean up None/NaN values
+                cleaned_result = {}
+                for k, v in result.items():
+                    if pd.notna(v) and v != '' and v is not None:
+                        cleaned_result[k] = v
+                    elif k in ['dataset_id', 'search_name', 'search_state', 'result_status']:
+                        # Required fields
+                        cleaned_result[k] = v if v is not None else ''
+                
+                search_results.append(cleaned_result)
+            
+            # Import search results one by one for better error reporting
+            imported_count = 0
+            for i, result in enumerate(search_results):
+                try:
+                    response = self.session.post(f"{self.api_url}/search_results", json=[result])
+                    response.raise_for_status()
+                    imported_count += 1
+                    print(f"📥 Imported search result {i+1}/{len(search_results)}: {result.get('search_name', 'Unknown')}")
+                    
+                except requests.exceptions.RequestException as e:
+                    print(f"❌ Failed to import search result {i+1}: {e}")
+                    if hasattr(e, 'response') and e.response:
+                        print(f"Error details: {e.response.text}")
+                    # Continue with other records
+                    
+            print(f"✅ Successfully imported {imported_count}/{len(search_results)} search results from CSV to {self.backend}")
+            return imported_count > 0
+            
+        except Exception as e:
+            print(f"❌ Failed to process CSV file: {e}")
+            return False
+    
+    def import_validated_csv(self, csv_path: str, tag: str, created_by: str = None,
+                            description: str = None) -> bool:
+        """Import validated overrides from CSV file via API"""
+        
+        csv_path = Path(csv_path)
+        if not csv_path.exists():
+            print(f"❌ CSV file not found: {csv_path}")
+            return False
+        
+        # Create or get dataset for validated overrides
+        dataset_id = self.get_or_create_dataset(
+            kind='validated',
+            tag=tag,
+            description=description,
+            created_by=created_by
+        )
+        
+        if not dataset_id:
+            return False
+        
+        try:
+            # Read CSV file
+            df = pd.read_csv(csv_path)
+            print(f"📊 Found {len(df)} records in CSV")
+            
+            # Validate required columns
+            required_cols = ['pharmacy_name', 'state_code', 'override_type', 'reason', 'validated_by']
+            missing_cols = [col for col in required_cols if col not in df.columns]
+            if missing_cols:
+                print(f"❌ Missing required columns: {missing_cols}")
+                return False
+            
+            # Convert DataFrame to validated overrides format
+            validated_overrides = []
+            for _, row in df.iterrows():
+                # Convert row to dict and clean up None/NaN values
+                override = {
+                    'dataset_id': dataset_id,
+                    'pharmacy_name': row.get('pharmacy_name'),
+                    'state_code': row.get('state_code'),
+                    'override_type': row.get('override_type'),
+                    'reason': row.get('reason'),
+                    'validated_by': row.get('validated_by'),
+                    'validated_at': row.get('validated_at'),  # Optional
+                    'notes': row.get('notes')  # Optional
+                }
+                
+                # Clean up None/NaN values
+                cleaned_override = {}
+                for k, v in override.items():
+                    if pd.notna(v) and v != '' and v is not None:
+                        cleaned_override[k] = v
+                    elif k in ['dataset_id', 'pharmacy_name', 'state_code', 'override_type', 'reason', 'validated_by']:
+                        # Required fields
+                        cleaned_override[k] = v if v is not None else ''
+                
+                validated_overrides.append(cleaned_override)
+            
+            # Import validated overrides one by one for better error reporting
+            imported_count = 0
+            for i, override in enumerate(validated_overrides):
+                try:
+                    response = self.session.post(f"{self.api_url}/validated_overrides", json=[override])
+                    response.raise_for_status()
+                    imported_count += 1
+                    print(f"📥 Imported validation {i+1}/{len(validated_overrides)}: {override.get('pharmacy_name', 'Unknown')}")
+                    
+                except requests.exceptions.RequestException as e:
+                    print(f"❌ Failed to import validation {i+1}: {e}")
+                    if hasattr(e, 'response') and e.response:
+                        print(f"Error details: {e.response.text}")
+                    # Continue with other records
+                    
+            print(f"✅ Successfully imported {imported_count}/{len(validated_overrides)} validated overrides from CSV to {self.backend}")
+            return imported_count > 0
+            
+        except Exception as e:
+            print(f"❌ Failed to process CSV file: {e}")
+            return False
 
     def _check_image_asset_exists(self, content_hash: str) -> bool:
         """Check if image asset already exists"""
@@ -430,21 +594,28 @@ def main():
     pharmacy_parser = subparsers.add_parser('pharmacies', help='Import pharmacies from CSV')
     pharmacy_parser.add_argument('csv_file', help='Path to pharmacy CSV file')
     pharmacy_parser.add_argument('tag', help='Dataset tag/version')
-    pharmacy_parser.add_argument('--backend', choices=['postgresql', 'supabase'], 
-                                default='postgresql', help='Backend to use')
+    pharmacy_parser.add_argument('--backend', choices=['supabase'], 
+                                default='supabase', help='Backend to use (Supabase only)')
     pharmacy_parser.add_argument('--created-by', default=None, help='Who is importing this data')
     pharmacy_parser.add_argument('--description', default=None, help='Dataset description')
-    pharmacy_parser.add_argument('--batch-size', type=int, default=100, help='Import batch size')
     
     # States import
-    states_parser = subparsers.add_parser('states', help='Import states from directory')
-    states_parser.add_argument('states_dir', help='Path to states directory')
+    states_parser = subparsers.add_parser('states', help='Import states from directory or CSV')
+    states_parser.add_argument('states_path', help='Path to states directory or CSV file')
     states_parser.add_argument('tag', help='Dataset tag/version')
-    states_parser.add_argument('--backend', choices=['postgresql', 'supabase'], 
-                              default='postgresql', help='Backend to use')
+    states_parser.add_argument('--backend', choices=['supabase'], 
+                              default='supabase', help='Backend to use (Supabase only)')
     states_parser.add_argument('--created-by', default=None, help='Who is importing this data')
     states_parser.add_argument('--description', default=None, help='Dataset description')
-    states_parser.add_argument('--batch-size', type=int, default=50, help='Import batch size')
+    
+    # Validated import
+    validated_parser = subparsers.add_parser('validated', help='Import validated overrides from CSV')
+    validated_parser.add_argument('csv_file', help='Path to validated CSV file')
+    validated_parser.add_argument('tag', help='Dataset tag/version')
+    validated_parser.add_argument('--backend', choices=['supabase'], 
+                                 default='supabase', help='Backend to use (Supabase only)')
+    validated_parser.add_argument('--created-by', default=None, help='Who is importing this data')
+    validated_parser.add_argument('--description', default=None, help='Dataset description')
     
     args = parser.parse_args()
     
@@ -459,16 +630,37 @@ def main():
             csv_path=args.csv_file,
             tag=args.tag,
             created_by=args.created_by,
-            description=args.description,
-            batch_size=args.batch_size
+            description=args.description
         )
     elif args.command == 'states':
-        success = importer.import_states_directory(
-            states_dir=args.states_dir,
+        # Auto-detect if path is CSV file or directory
+        states_path = Path(args.states_path)
+        if states_path.is_file() and states_path.suffix.lower() == '.csv':
+            # CSV file
+            success = importer.import_states_csv(
+                csv_path=args.states_path,
+                tag=args.tag,
+                created_by=args.created_by,
+                description=args.description
+            )
+        elif states_path.is_dir():
+            # Directory
+            success = importer.import_states_directory(
+                states_dir=args.states_path,
+                tag=args.tag,
+                created_by=args.created_by,
+                description=args.description,
+                batch_size=args.batch_size
+            )
+        else:
+            print(f"❌ Invalid states path: {args.states_path} (must be CSV file or directory)")
+            exit(1)
+    elif args.command == 'validated':
+        success = importer.import_validated_csv(
+            csv_path=args.csv_file,
             tag=args.tag,
             created_by=args.created_by,
-            description=args.description,
-            batch_size=args.batch_size
+            description=args.description
         )
     else:
         print(f"Unknown command: {args.command}")

@@ -1,0 +1,4 @@
+pharmacy_name,state_code,override_type,reason,validated_by
+"Belmar","FL","present","License found and verified","test_user"
+"Belmar","PA","empty","No license found in PA database","test_user"
+"Capitol Drugs","FL","present","Active license confirmed","test_user"

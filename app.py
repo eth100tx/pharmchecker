@@ -47,9 +47,8 @@ st.set_page_config(
 @st.cache_resource
 def get_api_client():
     """Get cached API client instance"""
-    # Use environment variable to determine cloud vs local
-    from config import use_cloud_database
-    return create_client(prefer_supabase=use_cloud_database())
+    # Always use Supabase
+    return create_client()
 
 def get_client():
     """Get API client with fallback initialization"""

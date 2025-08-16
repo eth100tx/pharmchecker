@@ -7,7 +7,8 @@ import os
 import streamlit as st
 from typing import Dict, Optional, Tuple
 import logging
-from .database import get_database_manager
+import sys
+from pathlib import Path
 
 logger = logging.getLogger(__name__)
 
@@ -34,66 +35,103 @@ class AuthManager:
         # Check if user exists in session state
         if 'user' not in st.session_state:
             try:
-                # Create or get default user from database
-                db = get_database_manager()
+                # Create or get default user via Supabase API
+                project_root = Path(__file__).parent.parent
+                api_path = project_root / "api_poc" / "gui"
+                sys.path.insert(0, str(api_path))
                 
-                # Look for existing admin user or create one
-                existing_user_sql = "SELECT id, github_login, email, role, is_active FROM app_users WHERE role = 'admin' OR github_login = 'admin' LIMIT 1"
-                user_df = db.execute_query(existing_user_sql, [])
+                from client import create_client
+                import requests
                 
-                if user_df.empty:
-                    # No existing admin user found, create one
-                    insert_sql = """
-                    INSERT INTO app_users (github_login, email, role, is_active) 
-                    VALUES (%s, %s, %s, %s)
-                    """
-                    db.execute_query(insert_sql, [
-                        'local_admin', 
-                        self.default_user_email, 
-                        self.default_user_role, 
-                        True
-                    ])
+                client = create_client()
+                
+                # Look for existing admin user
+                url = f"{client.supabase_client.url}/rest/v1/app_users"
+                params = {
+                    'or': '(role.eq.admin,github_login.eq.admin)',
+                    'limit': '1'
+                }
+                
+                response = requests.get(url, headers=client.supabase_client.headers, params=params, timeout=10)
+                
+                if response.status_code == 200:
+                    users = response.json()
                     
-                    # Query back to get the created user
-                    user_df = db.execute_query("SELECT id, github_login, email, role, is_active FROM app_users WHERE github_login = %s", ['local_admin'])
-                    
-                    if not user_df.empty:
-                        user_data = user_df.iloc[0].to_dict()
-                        logger.info(f"Created new local user: {self.default_user_email}")
+                    if not users:
+                        # No existing admin user found, create one
+                        user_data = {
+                            'github_login': 'local_admin',
+                            'email': self.default_user_email,
+                            'role': self.default_user_role,
+                            'is_active': True
+                        }
+                        
+                        create_response = requests.post(url, 
+                                                      headers=client.supabase_client.headers,
+                                                      json=[user_data],
+                                                      timeout=10)
+                        
+                        if create_response.status_code in [200, 201]:
+                            # Get the created user
+                            get_params = {'github_login': 'eq.local_admin'}
+                            get_response = requests.get(url, headers=client.supabase_client.headers, params=get_params, timeout=10)
+                            if get_response.status_code == 200:
+                                created_users = get_response.json()
+                                if created_users:
+                                    user_data = created_users[0]
+                                    logger.info(f"Created new local user: {self.default_user_email}")
+                                else:
+                                    logger.error("Failed to retrieve created user")
+                                    return self._create_fallback_user()
+                            else:
+                                logger.error("Failed to retrieve created user")
+                                return self._create_fallback_user()
+                        else:
+                            logger.error(f"Failed to create user: {create_response.status_code}")
+                            return self._create_fallback_user()
                     else:
-                        logger.error("Failed to create default local user")
-                        return self._create_fallback_user()
+                        # Found existing admin user, update it to match our config
+                        existing_user = users[0]
+                        user_id = existing_user['id']
+                        
+                        update_data = {
+                            'github_login': 'local_admin',
+                            'email': self.default_user_email,
+                            'role': self.default_user_role,
+                            'is_active': True
+                        }
+                        
+                        update_url = f"{client.supabase_client.url}/rest/v1/app_users"
+                        update_headers = client.supabase_client.headers.copy()
+                        update_headers['Prefer'] = 'return=representation'
+                        update_params = {'id': f'eq.{user_id}'}
+                        
+                        update_response = requests.patch(update_url,
+                                                       headers=update_headers,
+                                                       params=update_params,
+                                                       json=update_data,
+                                                       timeout=10)
+                        
+                        if update_response.status_code == 200:
+                            updated_users = update_response.json()
+                            if updated_users:
+                                user_data = updated_users[0]
+                                logger.info(f"Updated existing user (ID {user_id}) to: {self.default_user_email}")
+                            else:
+                                user_data = existing_user
+                                logger.warning("Update succeeded but no data returned, using existing user")
+                        else:
+                            logger.error(f"Failed to update user: {update_response.status_code}")
+                            user_data = existing_user
                 else:
-                    # Found existing admin user, update it to match our config
-                    existing_user = user_df.iloc[0].to_dict()
-                    user_id = existing_user['id']
-                    
-                    update_sql = """
-                    UPDATE app_users 
-                    SET github_login = %s, email = %s, role = %s, is_active = %s
-                    WHERE id = %s
-                    """
-                    db.execute_query(update_sql, [
-                        'local_admin',
-                        self.default_user_email,
-                        self.default_user_role,
-                        True,
-                        user_id
-                    ])
-                    
-                    # Query back to get the updated user
-                    user_df = db.execute_query("SELECT id, github_login, email, role, is_active FROM app_users WHERE id = %s", [user_id])
-                    user_data = user_df.iloc[0].to_dict()
-                    logger.info(f"Updated existing user (ID {user_id}) to: {self.default_user_email}")
+                    logger.error(f"Failed to query users: {response.status_code}")
+                    return self._create_fallback_user()
                 
                 # Store in session state
                 st.session_state.user = user_data
                 
             except Exception as e:
-                if "Direct SQL" in str(e) or "not supported" in str(e):
-                    logger.info("Direct SQL not supported - using fallback authentication")
-                else:
-                    logger.error(f"Database error during authentication: {e}")
+                logger.error(f"Database error during authentication: {e}")
                 return self._create_fallback_user()
             
         return st.session_state.user

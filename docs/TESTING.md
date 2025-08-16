@@ -4,6 +4,8 @@
 
 PharmChecker includes comprehensive testing capabilities to ensure system reliability and data accuracy. This guide covers all testing procedures from development through production deployment.
 
+**Backend Support:** PharmChecker now uses Supabase exclusively for simplified deployment and management. All testing procedures assume Supabase backend.
+
 ## Test Suite Components
 
 ### 1. System Test (`system_test.py`)
@@ -21,6 +23,28 @@ Complete end-to-end validation of the entire workflow.
 **Run the test:**
 ```bash
 python system_test.py
+```
+
+### 2. Export/Import Round-Trip Tests (`unit_tests/test_export_import.py`)
+
+Validates CSV export/import functionality for all dataset types.
+
+**What it tests:**
+- Pharmacy CSV export/import cycle
+- States CSV export/import cycle  
+- Validated CSV export/import cycle
+- Data integrity across round-trips
+- Schema validation
+
+**Run the tests:**
+```bash
+# Test specific dataset type
+python unit_tests/test_export_import.py --type pharmacies --tag pharmacies_sample_data
+python unit_tests/test_export_import.py --type states --tag states_sample_data
+python unit_tests/test_export_import.py --type validated --tag validated_sample_data
+
+# Run comprehensive tests
+python unit_tests/test_export_import.py --type all
 ```
 
 **Expected output:**
@@ -42,7 +66,7 @@ Overall Success: ✅ PASS
 - 5 search results with varying matches
 - Expected scores: 96.5 (match), 66.5 (weak), 39.4 (no match)
 
-### 2. Scoring Test (`test_scoring.py`)
+### 3. Scoring Test (`test_scoring.py`)
 
 Validates the address matching algorithm accuracy.
 
@@ -69,7 +93,7 @@ assert 60 <= score("123 Main St, Orlando", "123 Main St, Tampa") <= 70
 assert score("123 Main St", "456 Oak Ave") < 40
 ```
 
-### 3. GUI Test (`test_gui.py`)
+### 4. GUI Test (`test_gui.py`)
 
 Tests Streamlit interface components.
 
@@ -87,9 +111,26 @@ python test_gui.py
 
 ## Manual Testing Procedures
 
+### Quick Test Data Setup
+
+All test datasets can be imported automatically:
+
+```bash
+# Import all sample datasets for testing
+make import_sample_data
+
+# Import individual datasets
+make import_pharmacies_sample_data
+make import_states_sample_data  
+make import_validated_sample_data
+
+# Check status
+make status
+```
+
 ### Data Import Testing
 
-#### Test Pharmacy Import
+#### Test Pharmacy CSV Import
 ```bash
 # Prepare test CSV
 cat > test_pharmacies.csv << EOF
@@ -98,37 +139,101 @@ name,address,city,state,zip,state_licenses
 "Test Pharmacy 2","456 Oak Ave","Miami","FL","33101","[\"FL\"]"
 EOF
 
-# Import with unique tag
-python -m imports.pharmacies test_pharmacies.csv "test_$(date +%s)"
+# Import with API importer (simplified - no batch size needed)
+python -m imports.api_importer pharmacies test_pharmacies.csv "test_$(date +%s)" --backend supabase
 
 # Verify import
-python show_status.py
+make status
 ```
 
-#### Test State Search Import
+#### Test States CSV Import
 ```bash
-# Create test directory structure
-mkdir -p test_searches/FL
-cat > test_searches/FL/TestPharmacy_01_parse.json << EOF
-{
-  "metadata": {
-    "search_name": "Test Pharmacy 1",
-    "search_state": "FL",
-    "search_timestamp": "2024-01-15T10:00:00Z"
-  },
-  "results": [{
-    "license_number": "FL99999",
-    "license_status": "Active",
-    "address": "123 Main Street",
-    "city": "Orlando",
-    "state": "FL",
-    "zip": "32801"
-  }]
-}
+# Export existing states data to create test CSV
+python -c "
+import sys
+sys.path.append('api_poc/gui')
+from client import create_client
+from config import use_cloud_database
+import pandas as pd
+
+client = create_client(prefer_supabase=use_cloud_database())
+data = client.get_search_results(dataset_id=YOUR_DATASET_ID, limit=100)
+df = pd.DataFrame(data)
+df.to_csv('test_states.csv', index=False)
+print(f'Exported {len(df)} records')
+"
+
+# Import CSV
+python -m imports.api_importer states test_states.csv "test_states_$(date +%s)" --backend supabase
+```
+
+#### Test Validated CSV Import  
+```bash
+# Prepare test CSV
+cat > test_validated.csv << EOF
+pharmacy_name,state_code,override_type,reason,validated_by
+"Test Pharmacy","FL","present","License verified","test_user"
+"Test Pharmacy","GA","empty","No license in Georgia","test_user"
 EOF
 
 # Import
-python -m imports.states test_searches "test_states_$(date +%s)"
+python -m imports.api_importer validated test_validated.csv "test_validated_$(date +%s)" --backend supabase
+```
+
+#### Test Production Scrape Import
+```bash
+# Import large datasets using the resilient importer (production method)
+python imports/resilient_importer.py \
+    --states-dir "/path/to/scraped/data" \
+    --tag "production_test" \
+    --backend supabase \
+    --max-workers 8 \
+    --debug-log
+
+# Note: This is the only importer that uses batch processing for performance
+```
+
+### GUI Import/Export Testing
+
+#### Test CSV Export Functionality
+1. Open Streamlit app: `streamlit run app.py`
+2. Navigate to "Dataset Manager" → "Export Data" 
+3. Test each export type:
+   - Select dataset and click "📤 Export to CSV"
+   - Verify CSV downloads correctly
+   - Check column headers and data format
+   - Ensure no database-internal fields (id, created_at) are included
+
+#### Test CSV Import Functionality  
+1. Navigate to "Dataset Manager" → "Import Data"
+2. Test each import type:
+   - **Pharmacies**: Upload CSV with columns `[name, address, city, state, zip, state_licenses]`
+   - **States**: Upload CSV with columns `[search_name, search_state, ...]` 
+   - **Validated**: Upload CSV with columns `[pharmacy_name, state_code, override_type, reason, validated_by]`
+3. Verify debug output shows:
+   - File info and column validation
+   - Import progress for each record
+   - Success confirmation
+
+#### Expected Import Behavior
+```
+DEBUG: File Info
+- File name: test_pharmacies.csv
+- File size: 1434 bytes
+- Target tag: test_123
+
+DEBUG: CSV Data  
+- Rows: 6
+- Columns: ['name', 'address', 'city', 'state', 'zip', 'state_licenses']
+
+DEBUG: Import Process
+- Command: python -m imports.api_importer pharmacies /tmp/file.csv test_123 --backend supabase
+
+DEBUG: Import Results
+- Return code: 0
+- Output: ✅ Successfully imported 6/6 pharmacies to supabase
+
+✅ Import successful!
 ```
 
 ### GUI Testing Checklist
@@ -275,22 +380,47 @@ def validate_score_distribution(scores):
 ## Integration Testing
 
 ### Database Integration
-```bash
-# Test connection
-psql -U $DB_USER -d $DB_NAME -c "SELECT version();"
 
-# Test functions exist
-psql -U $DB_USER -d $DB_NAME -c "\df get_all_results_with_context"
+#### Test Supabase Connection
+```bash
+# Test basic connectivity
+python -c "
+import sys
+sys.path.append('api_poc/gui')
+from client import create_client
+from config import use_cloud_database
+
+client = create_client(prefer_supabase=use_cloud_database())
+datasets = client.get_datasets()
+print(f'✅ Connected: Found {len(datasets)} datasets')
+"
+
+# Test API endpoints
+curl -H 'apikey: YOUR_ANON_KEY' 'http://localhost:8000/rest/v1/datasets?select=*'
 
 # Test data flow
 python -c "
-from config import get_db_config
-import psycopg2
-conn = psycopg2.connect(**get_db_config())
-cur = conn.cursor()
-cur.execute('SELECT COUNT(*) FROM pharmacies')
-print(f'Pharmacies: {cur.fetchone()[0]}')
+import sys
+sys.path.append('api_poc/gui')  
+from client import create_client
+from config import use_cloud_database
+
+client = create_client(prefer_supabase=use_cloud_database())
+pharmacies = client.get_pharmacies(limit=5)
+states = client.get_search_results(limit=5) 
+print(f'Pharmacies: {len(pharmacies)}, States: {len(states)}')
 "
+```
+
+#### Test API Importer
+```bash
+# Test all three CSV import paths
+python -m imports.api_importer pharmacies --help
+python -m imports.api_importer states --help  
+python -m imports.api_importer validated --help
+
+# Verify simplified interface (no PostgreSQL options)
+python -m imports.api_importer pharmacies test.csv test_tag --backend supabase
 ```
 
 ### Screenshot Integration

@@ -19,7 +19,7 @@ def test_image_integration():
     
     # Create API client
     try:
-        client = create_client(prefer_supabase=True)
+        client = create_client()
         print(f"✅ API client created: {client.get_active_backend()}")
     except Exception as e:
         print(f"❌ Failed to create client: {e}")

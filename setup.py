@@ -268,12 +268,27 @@ class PharmCheckerSetup:
     def run_migrations(self) -> bool:
         """Run database migrations using the migration system"""
         try:
-            # Import the migration runner
+            # For Supabase with local Docker, check if schema exists
+            if self.backend == 'supabase':
+                try:
+                    # Test if core tables exist
+                    response = self.supabase_client.table('datasets').select('*').limit(1).execute()
+                    logger.info("✅ Supabase schema already set up")
+                    return True
+                except Exception as e:
+                    if 'does not exist' in str(e):
+                        logger.error("Schema not found. Please run: python setup_supabase_schema.py")
+                        return False
+                    else:
+                        logger.error(f"Error checking schema: {e}")
+                        return False
+            
+            # Import the migration runner for PostgreSQL
             sys.path.insert(0, str(self.migrations_dir))
             from migrate import MigrationRunner
             
             # Determine target based on backend
-            target = 'supabase' if self.backend == 'supabase' else 'local'
+            target = 'local'  # Only PostgreSQL uses migrations
             
             # Create and run migrations
             runner = MigrationRunner(target=target)

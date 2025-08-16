@@ -3,80 +3,104 @@
 Show database status - datasets and data counts
 """
 import os
+import argparse
 from dotenv import load_dotenv
-import psycopg2
+from supabase import create_client
 
 # Load environment first
 load_dotenv()
 
-def get_db_connection():
-    """Get database connection"""
-    return psycopg2.connect(
-        host=os.getenv('DB_HOST', 'localhost'),
-        port=int(os.getenv('DB_PORT', 5432)),
-        database=os.getenv('DB_NAME', 'pharmchecker'),
-        user=os.getenv('DB_USER', 'postgres'),
-        password=os.getenv('DB_PASSWORD')
-    )
+def get_supabase_connection():
+    """Get Supabase client connection"""
+    url = os.getenv('SUPABASE_URL')
+    service_key = os.getenv('SUPABASE_SERVICE_KEY')
+    
+    if not url or not service_key:
+        raise ValueError("SUPABASE_URL and SUPABASE_SERVICE_KEY must be set in .env file")
+    
+    return create_client(url, service_key)
 
 def show_status():
     """Show database status"""
     
     try:
-        conn = get_db_connection()
-        cur = conn.cursor()
+        supabase = get_supabase_connection()
         
         # Show datasets
         print("Datasets:")
-        cur.execute('SELECT tag, kind, description, created_at FROM datasets ORDER BY created_at DESC')
-        datasets = cur.fetchall()
+        datasets_response = supabase.table('datasets').select('tag, kind, description, created_at').order('created_at', desc=True).execute()
+        datasets = datasets_response.data
         
         if not datasets:
             print("  (no datasets)")
         else:
             for row in datasets:
-                tag, kind, description, created_at = row
+                tag = row['tag']
+                kind = row['kind'] 
+                description = row.get('description', '')
+                created_at = row['created_at']
                 desc_short = description[:50] + "..." if description and len(description) > 50 else description or ""
                 print(f"  {tag} ({kind}) - {desc_short}")
         
         # Show data counts
         print("\nData Counts:")
         
-        cur.execute('SELECT COUNT(*) FROM pharmacies')
-        pharmacy_count = cur.fetchone()[0]
+        pharmacy_response = supabase.table('pharmacies').select('id', count='exact').execute()
+        pharmacy_count = pharmacy_response.count if hasattr(pharmacy_response, 'count') else 0
         print(f"  Pharmacies: {pharmacy_count}")
         
-        cur.execute('SELECT COUNT(*) FROM search_results')
-        result_count = cur.fetchone()[0]
+        results_response = supabase.table('search_results').select('id', count='exact').execute()
+        result_count = results_response.count if hasattr(results_response, 'count') else 0
         print(f"  Search Results: {result_count}")
         
-        # Count unique searches in merged table
-        cur.execute('SELECT COUNT(DISTINCT (search_name, search_state)) FROM search_results')
-        search_count = cur.fetchone()[0]
+        # Count unique searches using RPC call for complex query
+        try:
+            unique_searches_response = supabase.rpc('count_unique_searches').execute()
+            search_count = unique_searches_response.data if unique_searches_response.data else 0
+        except:
+            # Fallback: get all search results and count unique combinations in Python
+            all_results = supabase.table('search_results').select('search_name, search_state').execute()
+            unique_combinations = set()
+            for result in all_results.data:
+                unique_combinations.add((result['search_name'], result['search_state']))
+            search_count = len(unique_combinations)
+        
         print(f"  Unique Searches: {search_count}")
         
-        cur.execute('SELECT COUNT(*) FROM image_assets')
-        image_count = cur.fetchone()[0]
+        images_response = supabase.table('image_assets').select('content_hash', count='exact').execute()
+        image_count = images_response.count if hasattr(images_response, 'count') else 0
         print(f"  Image Assets: {image_count}")
         
         # Show search breakdown if we have searches
         if search_count > 0:
             print("\nSearch Breakdown:")
-            cur.execute("""
-                SELECT search_name, search_state, COUNT(*) as result_count
-                FROM search_results
-                GROUP BY search_name, search_state
-                ORDER BY search_name, search_state
-            """)
-            
-            for row in cur.fetchall():
-                name, state, count = row
-                print(f"  {name} in {state}: {count} results")
-        
-        conn.close()
+            # Get search breakdown using RPC or fallback to Python aggregation
+            try:
+                breakdown_response = supabase.rpc('get_search_breakdown').execute()
+                breakdown_data = breakdown_response.data
+                for row in breakdown_data:
+                    print(f"  {row['search_name']} in {row['search_state']}: {row['result_count']} results")
+            except:
+                # Fallback: aggregate in Python
+                all_results = supabase.table('search_results').select('search_name, search_state').execute()
+                breakdown = {}
+                for result in all_results.data:
+                    key = (result['search_name'], result['search_state'])
+                    breakdown[key] = breakdown.get(key, 0) + 1
+                
+                for (name, state), count in sorted(breakdown.items()):
+                    print(f"  {name} in {state}: {count} results")
         
     except Exception as e:
         print(f"❌ Error checking status: {e}")
 
-if __name__ == "__main__":
+def main():
+    parser = argparse.ArgumentParser(description='Show PharmChecker database status')
+    parser.add_argument('--backend', choices=['supabase'], default='supabase',
+                       help='Database backend (only supabase supported)')
+    
+    args = parser.parse_args()
     show_status()
+
+if __name__ == "__main__":
+    main()

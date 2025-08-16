@@ -36,7 +36,7 @@ def get_image_display_url(storage_path: str, storage_type: str) -> Optional[str]
         
     if storage_type == 'local':
         # For local files, prepend the image cache directory
-        full_path = os.path.join('image_cache', storage_path)
+        full_path = os.path.join('imagecache', storage_path)
         if os.path.exists(full_path):
             return full_path
         else:
@@ -68,7 +68,7 @@ def get_image_display_url(storage_path: str, storage_type: str) -> Optional[str]
                 supabase = create_client(supabase_url, service_key)
                 
                 # Generate signed URL (valid for 1 hour)
-                signed_url_response = supabase.storage.from_('image_cache').create_signed_url(
+                signed_url_response = supabase.storage.from_('imagecache').create_signed_url(
                     storage_path, expires_in=3600
                 )
                 
@@ -761,15 +761,35 @@ def _highlight_address_matches(search_address: str, pharmacy_details: Dict) -> s
     return ', '.join(highlighted_parts)
 
 def get_pharmacy_info(pharmacy_name: str, pharmacies_dataset: str) -> Dict:
-    """Get pharmacy information from database (API-first architecture)"""
-    from .database import get_database_manager
+    """Get pharmacy information from Supabase API"""
+    import sys
+    import os
     
     try:
-        db = get_database_manager(allow_fallback=True)
+        # Import API client
+        sys.path.append(os.path.join(os.path.dirname(os.path.abspath(__file__)), '..', 'api_poc', 'gui'))
+        from client import create_client
         
-        # API-first: Always get pharmacy data via API
-        pharmacies_df = db.get_pharmacies(pharmacies_dataset)
-        if not pharmacies_df.empty:
+        client = create_client()
+        
+        # Get all datasets to find the dataset ID
+        datasets = client.get_datasets()
+        dataset_id = None
+        for dataset in datasets:
+            if dataset.get('kind') == 'pharmacies' and dataset.get('tag') == pharmacies_dataset:
+                dataset_id = dataset.get('id')
+                break
+        
+        if not dataset_id:
+            logger.warning(f"Dataset '{pharmacies_dataset}' not found")
+            return {}
+        
+        # Get pharmacies for this dataset
+        pharmacies = client.get_pharmacies(dataset_id=dataset_id, limit=9999)
+        if pharmacies:
+            import pandas as pd
+            pharmacies_df = pd.DataFrame(pharmacies)
+            
             # Filter by pharmacy name (try exact match first, then partial)
             matching = pharmacies_df[pharmacies_df['name'] == pharmacy_name]
             if matching.empty:
@@ -780,7 +800,7 @@ def get_pharmacy_info(pharmacy_name: str, pharmacies_dataset: str) -> Dict:
                 return matching.iloc[0].to_dict()
             
     except Exception as e:
-        logger.warning(f"Failed to get pharmacy info from database: {e}")
+        logger.warning(f"Failed to get pharmacy info from API: {e}")
     
     # Fallback to sample data
     sample_pharmacies = {

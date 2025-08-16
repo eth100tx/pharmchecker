@@ -1,14 +1,11 @@
 # PharmChecker Makefile
 # Convenient commands for development and testing
 
-# Backend configuration - auto-detect from .env USE_CLOUD_DB setting
-# Can still be overridden with BACKEND=postgresql or BACKEND=supabase
-USE_CLOUD_DB := $(shell grep -E '^USE_CLOUD_DB=' .env 2>/dev/null | cut -d= -f2 | tr -d ' ')
-AUTO_BACKEND := $(if $(filter true,$(USE_CLOUD_DB)),supabase,postgresql)
-BACKEND ?= $(AUTO_BACKEND)
-PYTHON_BACKEND_ARG := $(if $(filter supabase,$(BACKEND)),--backend supabase,--backend postgresql)
+# Backend configuration - Supabase only
+BACKEND := supabase
+PYTHON_BACKEND_ARG := --backend supabase
 
-.PHONY: help clean_states import_test_states import_test_states2 clean_all setup status migrate backend_info
+.PHONY: help clean clean_states import_test_states import_test_states2 clean_all setup status migrate backend_info
 
 # Default target
 help:
@@ -16,12 +13,11 @@ help:
 	@echo "================================="
 	@echo ""
 	@echo "Backend Configuration:"
-	@echo "  Current backend: $(BACKEND) (auto-detected from USE_CLOUD_DB=$(USE_CLOUD_DB))"
-	@echo "  backend_info       - Show current backend configuration"
-	@echo "  BACKEND=postgresql - Override to use local PostgreSQL"
-	@echo "  BACKEND=supabase   - Override to use Supabase cloud database"
+	@echo "  Using Supabase cloud database"
+	@echo "  backend_info       - Show Supabase configuration"
 	@echo ""
 	@echo "Database Management:"
+	@echo "  clean              - Remove all records from datasets, search_results, pharmacies, validated tables"
 	@echo "  clean_states        - Remove all search data (preserves pharmacies)"
 	@echo "  clean_all          - Full database reset and setup"
 	@echo "  migrate            - Run database schema migrations"
@@ -33,6 +29,12 @@ help:
 	@echo "  import_test_states2 - Import data/states_baseline2" 
 	@echo "  import_pharmacies   - Import converted pharmacy data"
 	@echo ""
+	@echo "Unit Test Data:"
+	@echo "  import_sample_data           - Import all sample datasets for testing"
+	@echo "  import_pharmacies_sample_data - Import pharmacies_sample_data"
+	@echo "  import_states_sample_data    - Import states_sample_data"
+	@echo "  import_validated_sample_data - Import validated_sample_data"
+	@echo ""
 	@echo "Development:"
 	@echo "  setup              - Initialize database and dependencies"
 	@echo "  status             - Show database status and counts"
@@ -41,52 +43,48 @@ help:
 	@echo "Examples:"
 	@echo "  make clean_states import_test_states  # Clean and import baseline"
 	@echo "  make status                           # Check current data"
-	@echo "  BACKEND=supabase make import_pharmacies  # Import to Supabase"
-	@echo "  BACKEND=postgresql make status        # Check PostgreSQL data"
+	@echo "  make import_sample_data              # Import all test datasets"
+
+# Clean all data tables (preserves schema)
+clean:
+	@echo "🧹 Cleaning all data tables (datasets, search_results, pharmacies, validated)..."
+	@python3 clean_data.py $(PYTHON_BACKEND_ARG)
 
 # Show backend configuration
 backend_info:
-	@echo "📡 Backend Configuration"
-	@echo "======================="
-	@echo "USE_CLOUD_DB from .env: $(USE_CLOUD_DB)"
-	@echo "Auto-detected backend: $(AUTO_BACKEND)"
+	@echo "📡 Supabase Configuration"
+	@echo "========================"
 	@echo "Active backend: $(BACKEND)"
 	@echo "Python args: $(PYTHON_BACKEND_ARG)"
 	@echo ""
-	@if [ "$(BACKEND)" = "supabase" ]; then \
-		echo "🌐 Supabase Configuration:"; \
-		. ./.env 2>/dev/null && echo "  SUPABASE_URL: $${SUPABASE_URL:-Not set}" || echo "  SUPABASE_URL: Not set"; \
-		. ./.env 2>/dev/null && [ -n "$${SUPABASE_SERVICE_KEY}" ] && echo "  SUPABASE_SERVICE_KEY: Set (hidden)" || echo "  SUPABASE_SERVICE_KEY: Not set"; \
-	else \
-		echo "🗄️  PostgreSQL Configuration:"; \
-		. ./.env 2>/dev/null && echo "  DB_HOST: $${DB_HOST:-localhost}" || echo "  DB_HOST: localhost"; \
-		. ./.env 2>/dev/null && echo "  DB_NAME: $${DB_NAME:-pharmchecker}" || echo "  DB_NAME: pharmchecker"; \
-		. ./.env 2>/dev/null && echo "  DB_USER: $${DB_USER:-postgres}" || echo "  DB_USER: postgres"; \
-	fi
+	@echo "🌐 Supabase Configuration:"
+	@. ./.env 2>/dev/null && echo "  SUPABASE_URL: $${SUPABASE_URL:-Not set}" || echo "  SUPABASE_URL: Not set"
+	@. ./.env 2>/dev/null && [ -n "$${SUPABASE_SERVICE_KEY}" ] && echo "  SUPABASE_SERVICE_KEY: Set (hidden)" || echo "  SUPABASE_SERVICE_KEY: Not set"
 
 # Clean search data only (preserve pharmacies)
 clean_states:
-	@echo "🧹 Cleaning search database ($(BACKEND))..."
+	@echo "🧹 Cleaning search database..."
 	@python3 clean_search_db.py $(PYTHON_BACKEND_ARG)
 
-# Import states_baseline data
+# Import states_baseline data  
 import_test_states:
-	@echo "📥 Importing states_baseline to $(BACKEND)..."
-	@python3 -m imports.api_importer states \
-		data/states_baseline \
-		states_baseline \
-		--backend $(BACKEND) \
+	@echo "📥 Importing states_baseline..."
+	@python3 imports/resilient_importer.py \
+		--states-dir data/states_baseline \
+		--tag states_baseline \
+		$(PYTHON_BACKEND_ARG) \
 		--created-by makefile_user \
 		--description "states_baseline test data" \
-		--batch-size 1
+		--max-workers 8 \
+		--batch-size 10
 
 # Import states_baseline data
 import_scrape_states:
-	@echo "📥 Importing states_baseline to $(BACKEND)..."
+	@echo "📥 Importing scrape data..."
 	@python3 imports/resilient_importer.py \
 		--states-dir /home/eric/ai/pharmchecker/data/2025-08-04 \
 		--tag Aug-04-scrape \
-		--backend $(BACKEND) \
+		$(PYTHON_BACKEND_ARG) \
 		--created-by makefile_user \
 		--description "small scrape FL MI NY PA" \
 		--max-workers 16 \
@@ -96,7 +94,7 @@ import_scrape_states:
 
 # Import states_baseline2 data  
 import_test_states2:
-	@echo "📥 Importing states_baseline2 to $(BACKEND)..."
+	@echo "📥 Importing states_baseline2 ..."
 	@python3 -c "\
 import os; \
 from pathlib import Path; \
@@ -110,24 +108,55 @@ print('✅ Import successful!' if success else '❌ Import failed!')"
 
 # Import pharmacy data
 import_pharmacies:
-	@echo "📥 Importing pharmacy data to $(BACKEND)..."
+	@echo "📥 Importing pharmacy data ..."
 	@python3 -m imports.api_importer pharmacies \
 		data/pharmacies_new.csv \
-		test_pharmacies_make \
-		--backend $(BACKEND) \
+		pharmacies_baseline \
+		$(PYTHON_BACKEND_ARG) \
 		--created-by makefile_user \
 		--description "Converted pharmacy test data" \
-		--batch-size 1
 
 import_pharmacy_rows:
-	@echo "📥 Importing pharmacy data to $(BACKEND)..."
+	@echo "📥 Importing pharmacy data ..."
 	@python3 -m imports.api_importer pharmacies \
 		temp/pharmacies.csv \
 		pharmacy_rows \
-		--backend $(BACKEND) \
+		$(PYTHON_BACKEND_ARG) \
 		--created-by makefile_user \
 		--description "Converted pharmacy test data" \
-		--batch-size 1
+
+# Import test datasets with correct naming for unit tests
+import_sample_data: import_pharmacies_sample_data import_states_sample_data import_validated_sample_data
+
+# Import pharmacies sample data for testing
+import_pharmacies_sample_data:
+	@echo "📥 Importing pharmacies_sample_data ..."
+	@python3 -m imports.api_importer pharmacies \
+		data/pharmacies_new.csv \
+		pharmacies_sample_data \
+		$(PYTHON_BACKEND_ARG) \
+		--created-by makefile_user \
+		--description "Pharmacy sample data for unit testing" \
+
+# Import states sample data for testing
+import_states_sample_data:
+	@echo "📥 Importing states_sample_data ..."
+	@python3 -m imports.api_importer states \
+		data/states_baseline \
+		states_sample_data \
+		$(PYTHON_BACKEND_ARG) \
+		--created-by makefile_user \
+		--description "States sample data for unit testing" \
+
+# Import validated sample data for testing  
+import_validated_sample_data:
+	@echo "📥 Importing validated_sample_data ..."
+	@python3 -m imports.api_importer validated \
+		data/validated_sample_data.csv \
+		validated_sample_data \
+		$(PYTHON_BACKEND_ARG) \
+		--created-by makefile_user \
+		--description "Validated sample data for unit testing" \
 # Database status
 status:
 	@echo "📊 Database Status ($(BACKEND))"
@@ -148,7 +177,7 @@ clean_all:
 # Run basic import tests
 test:
 	@echo "🧪 Running import tests..."
-	@make clean_states
+	@make clean
 	@make import_pharmacies  
 	@make import_test_states
 	@make status

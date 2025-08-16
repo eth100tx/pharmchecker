@@ -27,12 +27,11 @@ class DatabaseManager:
         """
         # Import here to avoid circular imports
         from utils.api_database import get_api_database_manager
-        from config import use_cloud_database
         
-        # Always use API manager in the new architecture
+        # Always use API manager with Supabase
         self._api_manager = get_api_database_manager(
             use_api=True,
-            use_cloud_db=use_cloud_database(),
+            use_cloud_db=True,
             allow_fallback=allow_fallback
         )
         

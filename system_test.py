@@ -25,7 +25,7 @@ from typing import Dict, List, Any
 sys.path.insert(0, str(Path(__file__).parent))
 sys.path.append(os.path.join('api_poc', 'gui'))
 
-from config import use_cloud_database
+# Always use Supabase
 from client import create_client
 from imports.pharmacies import PharmacyImporter
 from imports.states import StateImporter
@@ -38,7 +38,7 @@ class SystemTest:
     """Complete PharmChecker system test"""
     
     def __init__(self):
-        self.client = create_client(prefer_supabase=use_cloud_database())
+        self.client = create_client()
         self.test_results = {
             'start_time': datetime.now(),
             'steps': [],

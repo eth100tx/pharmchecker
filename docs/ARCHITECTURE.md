@@ -2,18 +2,18 @@
 
 ## System Overview
 
-PharmChecker is a three-tier application for pharmacy license verification:
+PharmChecker is a cloud-native application for pharmacy license verification:
 
 ```
 ┌─────────────────┐     ┌──────────────────┐     ┌─────────────────┐
-│   Data Sources  │────▶│  Import System   │────▶│   PostgreSQL    │
+│   Data Sources  │────▶│  Import System   │────▶│    Supabase     │
 │  (CSV/JSON)     │     │  (Python)        │     │   Database      │
 └─────────────────┘     └──────────────────┘     └─────────────────┘
                                                            │
                                                            ▼
 ┌─────────────────┐     ┌──────────────────┐     ┌─────────────────┐
-│   Web UI        │◀────│ Client-Side      │◀────│   REST API      │
-│  (Streamlit)    │     │ Scoring Engine   │     │ (PostgREST)     │
+│   Web UI        │◀────│ Client-Side      │◀────│   Supabase      │
+│  (Streamlit)    │     │ Scoring Engine   │     │   REST API      │
 └─────────────────┘     └──────────────────┘     └─────────────────┘
 ```
 
@@ -22,9 +22,11 @@ PharmChecker is a three-tier application for pharmacy license verification:
 1. **Dataset Independence**: Any combination of pharmacy, state search, and validation datasets can be loaded together
 2. **Natural Key Linking**: Uses pharmacy names and license numbers for relationships (no hardcoded IDs)
 3. **Transparent Client-Side Scoring**: Address scores calculated transparently via client-side `scoring_plugin.py`
-4. **API-First Architecture**: All operations via REST endpoints, no complex database functions
-5. **Comprehensive Results**: Single database query returns all data for client-side processing
+4. **API-First Architecture**: All operations via Supabase REST API, no complex database functions
+5. **Comprehensive Results**: Single database query returns all data for client-side processing  
 6. **Versioned Datasets**: Multiple versions of data can coexist with tags (e.g., "jan_2024", "feb_2024")
+7. **Simplified I/O**: All CSV imports use one-record-at-a-time approach for reliability and error reporting
+8. **Cloud-Native**: Supabase backend eliminates infrastructure management
 
 ## Database Schema
 
@@ -85,28 +87,48 @@ Benefits:
 
 ## Import System Architecture
 
-### Base Import Pattern
-All importers inherit from `BaseImporter`:
+### Unified API Importer (`imports/api_importer.py`)
+
+All CSV imports use a single simplified API-based importer:
+
 ```python
-class BaseImporter:
-    def create_dataset(kind, tag, description)
-    def batch_insert(table, records, batch_size=1000)
-    def handle_duplicates(on_conflict_action)
+class APIImporter:
+    def __init__(self, backend='supabase')  # Supabase only
+    def import_pharmacies_csv(csv_path, tag, created_by, description)
+    def import_states_csv(csv_path, tag, created_by, description) 
+    def import_validated_csv(csv_path, tag, created_by, description)
 ```
 
-### Import Flow
-1. **Validation**: Check file format and required fields
-2. **Dataset Creation**: Create versioned dataset with unique tag
-3. **Data Processing**: Transform and normalize records
-4. **Batch Insert**: Efficient bulk inserts with conflict handling
-5. **Cleanup**: Handle errors and rollback if needed
+### Simplified Import Flow
 
-### Importer Classes
+1. **Dataset Creation**: Create versioned dataset via Supabase API
+2. **CSV Processing**: Read and validate required columns
+3. **One-by-One Import**: Insert records individually for better error reporting
+4. **Progress Reporting**: Show detailed progress and specific error messages
+5. **Graceful Failure**: Continue processing even if individual records fail
 
-- **PharmacyImporter**: CSV → pharmacies table
-- **StateImporter**: JSON directory → search_results table  
-- **Client-Side Scoring**: Transparent computation via `scoring_plugin.py` → match_scores table
-- **ValidatedImporter**: CSV → validated_overrides table
+### Import Methods by Data Type
+
+#### 1. CSV Imports (Simplified, Reliable)
+- **Pharmacy CSV**: `python -m imports.api_importer pharmacies file.csv tag --backend supabase`
+- **States CSV**: `python -m imports.api_importer states file.csv tag --backend supabase`  
+- **Validated CSV**: `python -m imports.api_importer validated file.csv tag --backend supabase`
+- **Batch Size**: Always 1 (one record at a time for reliability)
+- **Error Handling**: Continues on failure, reports specific issues
+
+#### 2. Production Scrape Import (High Performance)
+- **Resilient Importer**: `python imports/resilient_importer.py --states-dir path --tag name --backend supabase`
+- **Batch Processing**: Uses configurable batch sizes for large datasets  
+- **Image Handling**: Processes and uploads screenshots with deduplication
+- **Resume Capability**: Can resume interrupted imports
+
+### Import Architecture Benefits
+
+- **No PostgreSQL Dependency**: Supabase-only for simplified deployment
+- **Better Error Reporting**: Shows exactly which record failed and why
+- **GUI Integration**: Direct integration with Streamlit interface
+- **Simplified Interface**: No complex batch size configuration needed
+- **Reliable**: One-by-one processing prevents bulk failures
 
 ## API-First Scoring Architecture
 
@@ -115,9 +137,9 @@ class BaseImporter:
 **Design Goal**: Cloud-compatible scoring without complex database functions
 
 **Key Principles**:
-- ✅ **No database-side Python execution** - pure PostgreSQL compatibility
+- ✅ **No database-side Python execution** - pure Supabase compatibility
 - ✅ **Client-side plugin execution** - `scoring_plugin.py` runs in GUI 
-- ✅ **REST API operations only** - standard table endpoints
+- ✅ **REST API operations only** - standard Supabase table endpoints
 - ✅ **Transparent to users** - scoring happens automatically when needed
 - ✅ **One-time computation** - results cached permanently per dataset pair
 
@@ -145,6 +167,58 @@ class BaseImporter:
 - `GET /datasets` - Get dataset metadata
 
 **No Complex RPC Functions Needed** - keeps database cloud-compatible
+
+## Complete I/O Architecture (7 Paths)
+
+PharmChecker implements 7 distinct I/O paths for comprehensive data management:
+
+### 1. Production Scrape Import (Directory → Database)
+- **Purpose**: High-performance import of scraped state board data  
+- **Implementation**: `imports/resilient_importer.py`
+- **Input**: Directory structure with JSON files + PNG screenshots
+- **Features**: Batch processing, image deduplication, resume capability
+- **Usage**: `python imports/resilient_importer.py --states-dir path --tag name`
+
+### 2-4. CSV Export Paths (Database → CSV)
+All exports via Streamlit GUI "Export Data" section:
+
+- **Pharmacy Export**: All pharmacy data excluding internal fields
+- **States Export**: All search results with metadata  
+- **Validated Export**: All validation overrides
+- **Implementation**: Direct API calls via `client.get_*()` methods
+- **Format**: Clean CSV with user-friendly column names
+
+### 5-7. CSV Import Paths (CSV → Database)  
+All imports via unified `imports/api_importer.py`:
+
+- **Pharmacy CSV Import**: `python -m imports.api_importer pharmacies file.csv tag`
+- **States CSV Import**: `python -m imports.api_importer states file.csv tag`
+- **Validated CSV Import**: `python -m imports.api_importer validated file.csv tag`
+- **Processing**: One record at a time for detailed error reporting
+- **Integration**: Available via GUI "Import Data" section
+
+### I/O Design Principles
+
+1. **Simplicity Over Performance**: CSV imports use single-record processing for reliability
+2. **Production vs. Development**: Scrape importer uses batch processing for large datasets
+3. **Unified Interface**: All CSV operations use same API importer with consistent CLI
+4. **Error Transparency**: Detailed progress reporting and specific failure messages
+5. **GUI Integration**: All I/O operations accessible through web interface
+
+### Error Handling Strategy
+
+```python
+# CSV Import: Continue on individual failures
+for record in records:
+    try:
+        import_single_record(record)
+        print(f"✅ Imported {record['name']}")
+    except Exception as e:
+        print(f"❌ Failed {record['name']}: {e}")
+        # Continue with next record
+
+# Result: Partial success with detailed error reporting
+```
 
 ## Scoring Algorithm
 
