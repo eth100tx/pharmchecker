@@ -416,7 +416,8 @@ def render_sidebar():
     # Navigation at top
     pages = [
         "Dataset Manager",
-        "Results Matrix"
+        "Results Matrix",
+        "States Dashboard"
     ]
     
     selected_page = st.sidebar.selectbox(
@@ -1259,6 +1260,561 @@ def render_api_poc_dataset_explorer():
         st.error(f"Error loading datasets: {e}")
 
 
+# States Dashboard helper functions
+def get_all_us_states():
+    """Return all 50 US states in alphabetical order"""
+    return ['AL','AK','AZ','AR','CA','CO','CT','DE','FL','GA',
+            'HI','ID','IL','IN','IA','KS','KY','LA','ME','MD',
+            'MA','MI','MN','MS','MO','MT','NE','NV','NH','NJ',
+            'NM','NY','NC','ND','OH','OK','OR','PA','RI','SC',
+            'SD','TN','TX','UT','VT','VA','WA','WV','WI','WY']
+
+def get_claimed_states(pharmacy_data):
+    """Extract states this pharmacy claims to be licensed in"""
+    if pharmacy_data.empty:
+        return []
+    
+    # Get state_licenses from pharmacy data (should be consistent across rows for same pharmacy)
+    state_licenses = pharmacy_data.iloc[0].get('state_licenses', [])
+    
+    # Handle different formats
+    if isinstance(state_licenses, str):
+        try:
+            import ast
+            state_licenses = ast.literal_eval(state_licenses)
+        except:
+            # Try JSON parsing as fallback
+            try:
+                import json
+                state_licenses = json.loads(state_licenses)
+            except:
+                state_licenses = []
+    elif state_licenses is None:
+        state_licenses = []
+    elif hasattr(state_licenses, 'tolist'):  # Handle pandas arrays
+        state_licenses = state_licenses.tolist()
+    
+    # Ensure it's a list and contains valid state codes
+    if isinstance(state_licenses, list):
+        # Filter to valid 2-character state codes
+        return [s for s in state_licenses if isinstance(s, str) and len(s) == 2 and s.isalpha()]
+    else:
+        return []
+
+def get_pharmacy_state_status(pharmacy_name, state_code, results_df):
+    """Get status for specific pharmacy-state combination"""
+    # Find the record for this pharmacy-state combination
+    matches = results_df[
+        (results_df['pharmacy_name'] == pharmacy_name) & 
+        (results_df['search_state'] == state_code)
+    ]
+    
+    if matches.empty:
+        return 'no data'
+    
+    # Use the status_bucket from the aggregated data
+    return matches.iloc[0].get('status_bucket', 'no data')
+
+def get_status_icon_only(status):
+    """Return just the icon for the status (no text)"""
+    status_icons = {
+        'match': '✅',
+        'weak match': '⚠️', 
+        'no match': '❌',
+        'no data': '⭕',  # Hollow circle - better represents empty/no data
+        'validated': '🔵',
+        'validated present': '🔵',
+        'validated empty': '🔵'
+    }
+    return status_icons.get(status, '⚪')
+
+def prepare_states_grid(results_df, loaded_states):
+    """Create pharmacy × state grid with status icons"""
+    if results_df.empty:
+        return pd.DataFrame()
+    
+    # Get all US states, filter to loaded states only
+    all_states = get_all_us_states()
+    display_states = [s for s in all_states if s in loaded_states]
+    
+    if not display_states:
+        return pd.DataFrame()
+    
+    # Get unique pharmacies
+    pharmacies = sorted(results_df['pharmacy_name'].unique())
+    
+    # SIMPLIFIED APPROACH: Show all pharmacy-state combinations that exist in results_df
+    # This matches exactly what Results Matrix shows
+    grid_rows = []
+    
+    for pharmacy in pharmacies:
+        row = {'Pharmacy': pharmacy}
+        
+        # For each display state, check if we have data in results_df
+        for state in display_states:
+            # Check if this pharmacy-state combination exists in results_df
+            combo_exists = not results_df[
+                (results_df['pharmacy_name'] == pharmacy) & 
+                (results_df['search_state'] == state)
+            ].empty
+            
+            if combo_exists:
+                # Get status for this pharmacy-state combination
+                status = get_pharmacy_state_status(pharmacy, state, results_df)
+                icon = get_status_icon_only(status)
+                row[state] = icon
+                
+                # Debug: Check what we found
+                import streamlit as st
+                debug_mode = st.session_state.get('debug_mode', False)
+                if debug_mode:
+                    st.write(f"**Debug Grid Prep: {pharmacy} + {state} = {icon} (status: {status})**")
+            else:
+                # No data for this combination
+                row[state] = ''
+        
+        grid_rows.append(row)
+    
+    return pd.DataFrame(grid_rows)
+
+def render_states_dashboard():
+    """Dense 2D grid: States (columns) × Pharmacies (rows) with status icons"""
+    st.markdown("### States Dashboard")
+    
+    # Check if data is loaded
+    if not is_data_loaded():
+        st.warning("⚠️ No data loaded. Please go to Dataset Manager to load data first.")
+        if st.button("Go to Dataset Manager"):
+            st.session_state.current_page = 'Dataset Manager'
+            st.rerun()
+        return
+    
+    # Get loaded data
+    comprehensive_results = get_comprehensive_results()
+    loaded_tags = get_loaded_tags()
+    db = get_database_manager()
+    
+    # Show current context
+    loaded_states = db.get_loaded_states(loaded_tags['states'])
+    if loaded_states:
+        states_str = ", ".join(sorted(loaded_states))
+        st.caption(f"🗺️ **Loaded States:** {states_str}")
+    
+    # Get aggregated results (same as Results Matrix)
+    with st.spinner("Preparing states grid..."):
+        # Filter to states with actual data
+        full_results_df = comprehensive_results.copy()
+        states_with_data = full_results_df[full_results_df['result_id'].notna()]['search_state'].unique()
+        full_results_df = full_results_df[full_results_df['search_state'].isin(states_with_data)]
+        
+        # Aggregate for matrix display
+        results_df = db.aggregate_for_matrix(full_results_df)
+        
+        if results_df.empty:
+            st.warning("No results found for states dashboard")
+            return
+        
+        # Calculate status buckets (same as Results Matrix)
+        def calculate_status_simple(row):
+            if pd.isna(row.get('result_id')):
+                return 'no data'
+            elif pd.notna(row.get('override_type')):
+                return 'validated'  
+            elif pd.notna(row.get('score_overall')):
+                score = float(row['score_overall'])
+                if score >= 85:
+                    return 'match'
+                elif score >= 60:
+                    return 'weak match'
+                else:
+                    return 'no match'
+            else:
+                return 'no data'
+        
+        results_df['status_bucket'] = results_df.apply(calculate_status_simple, axis=1)
+        
+        # Prepare grid data
+        grid_df = prepare_states_grid(results_df, loaded_states)
+    
+    if grid_df.empty:
+        st.warning("No pharmacy-state combinations found")
+        return
+    
+    # Status legend
+    st.markdown("**Legend:**")
+    col1, col2, col3, col4, col5 = st.columns(5)
+    with col1:
+        st.markdown("✅ **Match**")
+    with col2:
+        st.markdown("⚠️ **Weak**")
+    with col3:
+        st.markdown("❌ **No Match**")
+    with col4:
+        st.markdown("🔵 **Validated**")
+    with col5:
+        st.markdown("⭕ **No Data**")
+    
+    st.markdown("---")
+    
+    # Display grid
+    st.markdown("**Pharmacy License Status by State**")
+    st.caption("Interactive grid showing license verification status. Click any status icon to view detailed information.")
+    
+    # Add pagination/filtering controls for very large grids
+    st.markdown("**🔍 Compact Grid - Click any icon to view details:**")
+    
+    total_pharmacies = len(grid_df)
+    total_states = len([col for col in grid_df.columns if col != 'Pharmacy'])
+    
+    # Show grid size and add controls for large datasets
+    if total_pharmacies > 20 or total_states > 10:
+        col1, col2, col3 = st.columns(3)
+        
+        with col1:
+            st.info(f"📊 **Grid:** {total_pharmacies} pharmacies × {total_states} states")
+        
+        with col2:
+            # Pharmacy search/filter
+            pharmacy_filter = st.text_input("Filter pharmacies:", placeholder="Search by name...", key="pharmacy_filter")
+            
+        with col3:
+            # Pagination control
+            show_all = st.checkbox("Show all", value=total_pharmacies <= 25, help="Uncheck to enable pagination")
+        
+        # Apply pharmacy filter
+        if pharmacy_filter:
+            filtered_df = grid_df[grid_df['Pharmacy'].str.contains(pharmacy_filter, case=False, na=False)]
+        else:
+            filtered_df = grid_df.copy()
+        
+        # Apply pagination if needed
+        if not show_all and len(filtered_df) > 25:
+            page_size = 25
+            max_page = (len(filtered_df) - 1) // page_size + 1
+            page_num = st.number_input("Page", min_value=1, max_value=max_page, value=1, key="page_selector") - 1
+            start_idx = page_num * page_size
+            end_idx = min(start_idx + page_size, len(filtered_df))
+            display_df = filtered_df.iloc[start_idx:end_idx].copy()
+            st.caption(f"📄 Showing {start_idx + 1}-{end_idx} of {len(filtered_df)} pharmacies" + 
+                      (f" (filtered from {total_pharmacies})" if pharmacy_filter else ""))
+        else:
+            display_df = filtered_df.copy()
+            if pharmacy_filter and len(display_df) < total_pharmacies:
+                st.caption(f"📄 Showing {len(display_df)} of {total_pharmacies} pharmacies (filtered)")
+    else:
+        display_df = grid_df.copy()
+    
+    if not display_df.empty:
+        state_columns = [col for col in display_df.columns if col != 'Pharmacy']
+        
+        # Fixed widths to prevent stretching and ensure density
+        num_states = len(state_columns)
+        
+        # Fixed pixel-based layout using CSS - no Streamlit column stretching
+        pharmacy_width_px = 200  # Fixed 200px for pharmacy names
+        state_width_px = 35      # Fixed 35px for state icons
+        total_width_px = pharmacy_width_px + (state_width_px * num_states)
+        
+        # We'll use CSS to create fixed-width layout instead of Streamlit columns
+        
+        # Ultra-dense fixed-width CSS table layout
+        st.markdown(f"""
+        <style>
+        .fixed-grid {{
+            display: table;
+            border-collapse: collapse;
+            width: {total_width_px}px;
+            font-family: sans-serif;
+            border: 1px solid #ddd;
+        }}
+        .grid-header {{
+            display: table-row;
+            background-color: #f0f0f0;
+            font-weight: bold;
+            border-bottom: 1px solid #ddd;
+        }}
+        .grid-row {{
+            display: table-row;
+            height: 24px;
+        }}
+        .grid-row:hover {{
+            background-color: #f9f9f9;
+        }}
+        .grid-cell-pharmacy {{
+            display: table-cell;
+            width: {pharmacy_width_px}px;
+            padding: 2px 8px;
+            vertical-align: middle;
+            font-size: 14px;
+            border-right: 1px solid #eee;
+            overflow: hidden;
+            text-overflow: ellipsis;
+            white-space: nowrap;
+        }}
+        .grid-cell-state {{
+            display: table-cell;
+            width: {state_width_px}px;
+            padding: 0px;
+            text-align: center;
+            vertical-align: middle;
+            border-right: 1px solid #eee;
+        }}
+        .grid-header .grid-cell-pharmacy {{
+            font-weight: bold;
+            text-align: center;
+            padding: 8px;
+        }}
+        .grid-header .grid-cell-state {{
+            font-weight: bold;
+            font-size: 14px;
+            padding: 8px 2px;
+        }}
+        .state-icon-btn {{
+            background: none;
+            border: none;
+            font-size: 16px;
+            cursor: pointer;
+            padding: 2px;
+            width: 24px;
+            height: 20px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+        }}
+        .state-icon-btn:hover {{
+            background-color: #e0e0e0;
+            border-radius: 2px;
+        }}
+        </style>
+        """, unsafe_allow_html=True)
+        
+        # Create a truly fixed-width container that doesn't stretch
+        st.markdown(f'''
+        <div style="width: {total_width_px}px; max-width: {total_width_px}px; overflow-x: auto; border: 1px solid #ddd;">
+        ''', unsafe_allow_html=True)
+        
+        # Simple approach: Use very narrow columns with exact pixel control
+        # Create the grid row by row with minimal Streamlit interference
+        
+        # CSS for the constrained grid
+        st.markdown(f"""
+        <style>
+        .constrained-grid {{
+            width: {total_width_px}px !important;
+            max-width: {total_width_px}px !important;
+        }}
+        .constrained-grid .stColumns {{
+            width: {total_width_px}px !important;
+            max-width: {total_width_px}px !important;
+        }}
+        .constrained-grid .stColumn:nth-child(1) {{
+            flex: 0 0 {pharmacy_width_px}px !important;
+            max-width: {pharmacy_width_px}px !important;
+            min-width: {pharmacy_width_px}px !important;
+        }}
+        </style>
+        """, unsafe_allow_html=True)
+        
+        # Add individual state column CSS
+        for i in range(num_states):
+            st.markdown(f"""
+            <style>
+            .constrained-grid .stColumn:nth-child({i+2}) {{
+                flex: 0 0 {state_width_px}px !important;
+                max-width: {state_width_px}px !important;
+                min-width: {state_width_px}px !important;
+            }}
+            </style>
+            """, unsafe_allow_html=True)
+        
+        # Additional button styling
+        st.markdown("""
+        <style>
+        .constrained-grid .stButton > button {
+            width: 24px !important;
+            height: 20px !important;
+            padding: 0px !important;
+            margin: 0px auto !important;
+            font-size: 14px !important;
+            border: none !important;
+            background: transparent !important;
+            min-height: 20px !important;
+        }
+        .constrained-grid .stButton > button:hover {
+            background-color: #e0e0e0 !important;
+            border-radius: 2px !important;
+        }
+        .grid-pharmacy {
+            font-size: 14px;
+            padding: 2px 8px;
+            margin: 0px;
+            height: 24px;
+            line-height: 1.2;
+            overflow: hidden;
+            text-overflow: ellipsis;
+            white-space: nowrap;
+            display: flex;
+            align-items: center;
+        }
+        .grid-header {
+            font-size: 14px;
+            font-weight: bold;
+            text-align: center;
+            padding: 8px 2px;
+            margin: 0px;
+            background-color: #f0f0f0;
+            border-bottom: 1px solid #ddd;
+            height: 32px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+        }
+        </style>
+        """, unsafe_allow_html=True)
+        
+        # Header row
+        with st.container():
+            st.markdown('<div class="constrained-grid">', unsafe_allow_html=True)
+            header_cols = st.columns([1] + [0.175] * num_states)  # Relative ratios
+            
+            with header_cols[0]:
+                st.markdown('<div class="grid-header">Pharmacy</div>', unsafe_allow_html=True)
+            
+            for i, state in enumerate(state_columns):
+                with header_cols[i + 1]:
+                    st.markdown(f'<div class="grid-header">{state}</div>', unsafe_allow_html=True)
+            
+            st.markdown('</div>', unsafe_allow_html=True)
+        
+        # Data rows
+        for row_idx, row in display_df.iterrows():
+            pharmacy_name = row['Pharmacy']
+            
+            with st.container():
+                st.markdown('<div class="constrained-grid">', unsafe_allow_html=True)
+                cols = st.columns([1] + [0.175] * num_states)  # Same ratios as header
+                
+                # Pharmacy name
+                with cols[0]:
+                    display_name = pharmacy_name
+                    if len(display_name) > 25:
+                        display_name = display_name[:22] + "..."
+                    st.markdown(f'<div class="grid-pharmacy" title="{pharmacy_name}">{display_name}</div>', 
+                              unsafe_allow_html=True)
+                
+                # State buttons
+                for i, state in enumerate(state_columns):
+                    with cols[i + 1]:
+                        cell_value = row[state]
+                        if cell_value != '':
+                            if st.button(
+                                cell_value,
+                                key=f"constrained_btn_{pharmacy_name}_{state}_{row_idx}",
+                                help=f"{pharmacy_name} in {state}",
+                                use_container_width=False
+                            ):
+                                st.session_state.selected_detail_pharmacy = pharmacy_name
+                                st.session_state.selected_detail_state = state
+                                st.rerun()
+                
+                st.markdown('</div>', unsafe_allow_html=True)
+        
+        st.markdown('</div>', unsafe_allow_html=True)
+    
+    # Show detailed view if something is selected
+    detail_pharmacy = st.session_state.get('selected_detail_pharmacy')
+    detail_state = st.session_state.get('selected_detail_state')
+    
+    if detail_pharmacy and detail_state:
+        # Verify the selection is valid
+        valid_selection = False
+        if not grid_df.empty:
+            matching_rows = grid_df[grid_df['Pharmacy'] == detail_pharmacy]
+            if not matching_rows.empty and detail_state in grid_df.columns:
+                cell_value = matching_rows.iloc[0][detail_state]
+                valid_selection = (cell_value != '')
+        
+        if valid_selection:
+            st.markdown("---")
+            st.subheader("Detailed View")
+            st.info(f"**Selected:** {detail_pharmacy} in {detail_state}")
+            
+            # Add clear selection button
+            if st.button("❌ Clear Selection", key="clear_detail_selection"):
+                del st.session_state.selected_detail_pharmacy
+                del st.session_state.selected_detail_state
+                st.rerun()
+            
+            # Find the corresponding row in results matrix format
+            matrix_row = results_df[
+                (results_df['pharmacy_name'] == detail_pharmacy) & 
+                (results_df['search_state'] == detail_state)
+            ]
+            
+            if not matrix_row.empty:
+                selected_row = matrix_row.iloc[0]
+                # Get detail data from comprehensive results
+                detail_results = db.filter_for_detail(full_results_df, detail_pharmacy, detail_state)
+                display_row_detail_section(selected_row, st.session_state.selected_datasets, 
+                                         st.session_state.get('debug_mode', False), detail_results)
+            else:
+                st.error("Could not find detailed data for this selection.")
+        else:
+            # Clear invalid selection
+            if 'selected_detail_pharmacy' in st.session_state:
+                del st.session_state.selected_detail_pharmacy
+            if 'selected_detail_state' in st.session_state:
+                del st.session_state.selected_detail_state
+    
+    # Summary statistics
+    st.markdown("---")
+    st.subheader("Summary")
+    
+    total_combinations = 0
+    status_counts = {}
+    
+    # Debug: Show what we're working with
+    debug_mode = st.session_state.get('debug_mode', False)
+    if debug_mode:
+        st.write(f"**Debug: Grid has {len(grid_df)} rows and {len(grid_df.columns)} columns**")
+        st.write(f"**Debug: Results DF has {len(results_df)} rows**")
+        st.write(f"**Debug: Grid columns: {list(grid_df.columns)}**")
+    
+    for _, row in grid_df.iterrows():
+        pharmacy_name = row['Pharmacy']
+        for state in grid_df.columns[1:]:  # Skip 'Pharmacy' column
+            cell_value = row[state]
+            if cell_value != '':  # Only count non-empty cells
+                total_combinations += 1
+                # Get the actual status for counting
+                status = get_pharmacy_state_status(pharmacy_name, state, results_df)
+                status_counts[status] = status_counts.get(status, 0) + 1
+                
+                if debug_mode:
+                    st.write(f"**Debug: {pharmacy_name} + {state} = {cell_value} (status: {status})**")
+    
+    if debug_mode:
+        st.write(f"**Debug: Total combinations: {total_combinations}**")
+        st.write(f"**Debug: Status counts: {status_counts}**")
+    
+    col1, col2, col3, col4, col5, col6 = st.columns(6)
+    with col1:
+        st.metric("Total Checked", total_combinations)
+    with col2:
+        st.metric("Matches", status_counts.get('match', 0))
+    with col3:
+        st.metric("Weak Matches", status_counts.get('weak match', 0))
+    with col4:
+        st.metric("No Matches", status_counts.get('no match', 0))
+    with col5:
+        st.metric("Validated", status_counts.get('validated', 0))
+    with col6:
+        st.metric("No Data", status_counts.get('no data', 0))
+    
+    # Export functionality
+    st.subheader("Export")
+    create_export_button(grid_df, "states_dashboard")
+
 def render_results_matrix():
     """Main results matrix view using loaded data"""
     st.markdown("### Results Matrix")
@@ -1541,6 +2097,8 @@ def main():
         render_dataset_manager()
     elif current_page == "Results Matrix":
         render_results_matrix()
+    elif current_page == "States Dashboard":
+        render_states_dashboard()
     
     # Footer
     st.markdown("---")
