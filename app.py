@@ -471,7 +471,7 @@ def render_sidebar():
     
     
     # Validation controls (inline with validated box above)
-    if datasets.get('validated') or st.session_state.current_page == 'Results Matrix':
+    if datasets.get('validated') or st.session_state.current_page in ['Results Matrix', 'States Dashboard']:
         # Initialize validation lock state
         if 'validation_system_locked' not in st.session_state:
             st.session_state.validation_system_locked = True
@@ -1515,134 +1515,40 @@ def render_states_dashboard():
         state_width_px = 35      # Fixed 35px for state icons
         total_width_px = pharmacy_width_px + (state_width_px * num_states)
         
-        # We'll use CSS to create fixed-width layout instead of Streamlit columns
         
-        # Ultra-dense fixed-width CSS table layout
-        st.markdown(f"""
-        <style>
-        .fixed-grid {{
-            display: table;
-            border-collapse: collapse;
-            width: {total_width_px}px;
-            font-family: sans-serif;
-            border: 1px solid #ddd;
-        }}
-        .grid-header {{
-            display: table-row;
-            background-color: #f0f0f0;
-            font-weight: bold;
-            border-bottom: 1px solid #ddd;
-        }}
-        .grid-row {{
-            display: table-row;
-            height: 24px;
-        }}
-        .grid-row:hover {{
-            background-color: #f9f9f9;
-        }}
-        .grid-cell-pharmacy {{
-            display: table-cell;
-            width: {pharmacy_width_px}px;
-            padding: 2px 8px;
-            vertical-align: middle;
-            font-size: 14px;
-            border-right: 1px solid #eee;
-            overflow: hidden;
-            text-overflow: ellipsis;
-            white-space: nowrap;
-        }}
-        .grid-cell-state {{
-            display: table-cell;
-            width: {state_width_px}px;
-            padding: 0px;
-            text-align: center;
-            vertical-align: middle;
-            border-right: 1px solid #eee;
-        }}
-        .grid-header .grid-cell-pharmacy {{
-            font-weight: bold;
-            text-align: center;
-            padding: 8px;
-        }}
-        .grid-header .grid-cell-state {{
-            font-weight: bold;
-            font-size: 14px;
-            padding: 8px 2px;
-        }}
-        .state-icon-btn {{
-            background: none;
-            border: none;
-            font-size: 16px;
-            cursor: pointer;
-            padding: 2px;
-            width: 24px;
-            height: 20px;
-            display: flex;
-            align-items: center;
-            justify-content: center;
-        }}
-        .state-icon-btn:hover {{
-            background-color: #e0e0e0;
-            border-radius: 2px;
-        }}
-        </style>
-        """, unsafe_allow_html=True)
+        # Add a container marker for the grid section
+        st.markdown('<div id="states-grid-container">', unsafe_allow_html=True)
         
-        # Create a truly fixed-width container that doesn't stretch
-        st.markdown(f'''
-        <div style="width: {total_width_px}px; max-width: {total_width_px}px; overflow-x: auto; border: 1px solid #ddd;">
-        ''', unsafe_allow_html=True)
-        
-        # Simple approach: Use very narrow columns with exact pixel control
-        # Create the grid row by row with minimal Streamlit interference
-        
-        # CSS for the constrained grid
-        st.markdown(f"""
-        <style>
-        .constrained-grid {{
-            width: {total_width_px}px !important;
-            max-width: {total_width_px}px !important;
-        }}
-        .constrained-grid .stColumns {{
-            width: {total_width_px}px !important;
-            max-width: {total_width_px}px !important;
-        }}
-        .constrained-grid .stColumn:nth-child(1) {{
-            flex: 0 0 {pharmacy_width_px}px !important;
-            max-width: {pharmacy_width_px}px !important;
-            min-width: {pharmacy_width_px}px !important;
-        }}
-        </style>
-        """, unsafe_allow_html=True)
-        
-        # Add individual state column CSS
-        for i in range(num_states):
-            st.markdown(f"""
-            <style>
-            .constrained-grid .stColumn:nth-child({i+2}) {{
-                flex: 0 0 {state_width_px}px !important;
-                max-width: {state_width_px}px !important;
-                min-width: {state_width_px}px !important;
-            }}
-            </style>
-            """, unsafe_allow_html=True)
-        
-        # Additional button styling
+        # Compact button and row styling similar to pharmacy-scoreboard
         st.markdown("""
         <style>
-        .constrained-grid .stButton > button {
-            width: 24px !important;
-            height: 20px !important;
+        /* Compact button styling only within the grid container */
+        #states-grid-container + div .stButton > button {
+            width: 30px !important;
+            height: 30px !important;
+            min-height: 30px !important;
+            font-size: 16px !important;
             padding: 0px !important;
-            margin: 0px auto !important;
-            font-size: 14px !important;
-            border: none !important;
-            background: transparent !important;
-            min-height: 20px !important;
+            margin: 0px !important;
+            border: 1px solid #ddd !important;
+            background-color: white !important;
+            line-height: 1 !important;
         }
-        .constrained-grid .stButton > button:hover {
-            background-color: #e0e0e0 !important;
-            border-radius: 2px !important;
+        #states-grid-container + div .stButton > button:hover {
+            background-color: #e7f3ff !important;
+        }
+        #states-grid-container + div .stButton {
+            margin: 0px !important;
+            padding: 0px !important;
+        }
+        /* Reduce column padding within grid */
+        #states-grid-container + div div[data-testid="column"] {
+            padding: 2px !important;
+        }
+        /* Reduce vertical spacing between rows within grid */
+        #states-grid-container + div div.row-widget.stHorizontalBlock {
+            margin-top: -0.5rem !important;
+            margin-bottom: -0.5rem !important;
         }
         .grid-pharmacy {
             font-size: 14px;
@@ -1660,11 +1566,11 @@ def render_states_dashboard():
             font-size: 14px;
             font-weight: bold;
             text-align: center;
-            padding: 8px 2px;
+            padding: 4px 2px;
             margin: 0px;
             background-color: #f0f0f0;
             border-bottom: 1px solid #ddd;
-            height: 32px;
+            height: 28px;
             display: flex;
             align-items: center;
             justify-content: center;
@@ -1672,53 +1578,35 @@ def render_states_dashboard():
         </style>
         """, unsafe_allow_html=True)
         
-        # Header row
-        with st.container():
-            st.markdown('<div class="constrained-grid">', unsafe_allow_html=True)
-            header_cols = st.columns([1] + [0.175] * num_states)  # Relative ratios
-            
-            with header_cols[0]:
-                st.markdown('<div class="grid-header">Pharmacy</div>', unsafe_allow_html=True)
-            
-            for i, state in enumerate(state_columns):
-                with header_cols[i + 1]:
-                    st.markdown(f'<div class="grid-header">{state}</div>', unsafe_allow_html=True)
-            
-            st.markdown('</div>', unsafe_allow_html=True)
+        # Header row - simplified without container wrapper
+        header_cols = st.columns([4] + [0.5] * num_states)  # Match pharmacy-scoreboard ratios
+        header_cols[0].markdown("**Pharmacy**")
+        for i, state in enumerate(state_columns):
+            header_cols[i+1].markdown(f"<div style='text-align:center'><b>{state}</b></div>", unsafe_allow_html=True)
         
-        # Data rows
+        # Data rows - simplified without container wrapper
         for row_idx, row in display_df.iterrows():
             pharmacy_name = row['Pharmacy']
+            cols = st.columns([4] + [0.5] * num_states)  # Match pharmacy-scoreboard ratios
             
-            with st.container():
-                st.markdown('<div class="constrained-grid">', unsafe_allow_html=True)
-                cols = st.columns([1] + [0.175] * num_states)  # Same ratios as header
-                
-                # Pharmacy name
-                with cols[0]:
-                    display_name = pharmacy_name
-                    if len(display_name) > 25:
-                        display_name = display_name[:22] + "..."
-                    st.markdown(f'<div class="grid-pharmacy" title="{pharmacy_name}">{display_name}</div>', 
-                              unsafe_allow_html=True)
-                
-                # State buttons
-                for i, state in enumerate(state_columns):
-                    with cols[i + 1]:
-                        cell_value = row[state]
-                        if cell_value != '':
-                            if st.button(
-                                cell_value,
-                                key=f"constrained_btn_{pharmacy_name}_{state}_{row_idx}",
-                                help=f"{pharmacy_name} in {state}",
-                                use_container_width=False
-                            ):
-                                st.session_state.selected_detail_pharmacy = pharmacy_name
-                                st.session_state.selected_detail_state = state
-                                st.rerun()
-                
-                st.markdown('</div>', unsafe_allow_html=True)
+            # Pharmacy name
+            cols[0].write(pharmacy_name)
+            
+            # State buttons
+            for i, state in enumerate(state_columns):
+                cell_value = row[state]
+                if cell_value != '':
+                    if cols[i + 1].button(
+                        cell_value,
+                        key=f"grid_btn_{pharmacy_name}_{state}_{row_idx}",
+                        help=f"{pharmacy_name} in {state}",
+                        use_container_width=False
+                    ):
+                        st.session_state.selected_detail_pharmacy = pharmacy_name
+                        st.session_state.selected_detail_state = state
+                        st.rerun()
         
+        # Close the grid container
         st.markdown('</div>', unsafe_allow_html=True)
     
     # Show detailed view if something is selected
@@ -1740,7 +1628,7 @@ def render_states_dashboard():
             st.info(f"**Selected:** {detail_pharmacy} in {detail_state}")
             
             # Add clear selection button
-            if st.button("❌ Clear Selection", key="clear_detail_selection"):
+            if st.button("Clear Selection", key="clear_detail_selection", type="secondary"):
                 del st.session_state.selected_detail_pharmacy
                 del st.session_state.selected_detail_state
                 st.rerun()
