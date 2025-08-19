@@ -52,22 +52,24 @@ dataset_ids AS (
     (SELECT id FROM datasets WHERE kind = 'validated' AND tag = p_validated_tag) as validated_id
 ),
 pharmacy_state_pairs AS (
-  -- Get all (pharmacy, state) pairs from claimed licenses
-  SELECT 
+  -- Get (pharmacy, state) pairs only for states with search data
+  SELECT DISTINCT
     p.id AS pharmacy_id,
     p.name AS pharmacy_name,
     p.address AS pharmacy_address,
     p.city AS pharmacy_city,
     p.state AS pharmacy_state,
     p.zip AS pharmacy_zip,
-    (jsonb_array_elements_text(p.state_licenses))::char(2) AS state_code,
+    sr.search_state AS state_code,
     d.pharmacies_id,
     d.states_id,
     d.validated_id
-  FROM pharmacies p, dataset_ids d
-  WHERE p.dataset_id = d.pharmacies_id
-    AND p.state_licenses IS NOT NULL 
-    AND p.state_licenses <> '[]'::jsonb
+  FROM dataset_ids d
+  INNER JOIN pharmacies p ON p.dataset_id = d.pharmacies_id
+  INNER JOIN search_results sr 
+    ON sr.search_name = p.name 
+    AND sr.dataset_id = d.states_id
+  WHERE (p.state_licenses IS NULL OR p.state_licenses = '[]'::jsonb OR p.state_licenses ? sr.search_state)
 ),
 all_results AS (
   -- Get ALL search results for pharmacy-state pairs (no aggregation)

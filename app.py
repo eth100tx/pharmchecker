@@ -209,19 +209,15 @@ def get_dataset_stats(kind: str, tag: str) -> Dict:
     if not dataset_info:
         return {'record_count': 0}
     
-    # Get record count by querying the appropriate table
+    # Get record count efficiently using count-only method
     try:
         dataset_id = dataset_info.get('id')
         if kind == 'pharmacies':
-            records = client.get_pharmacies(dataset_id=dataset_id, limit=9999)
-            record_count = len(records) if isinstance(records, list) else 0
+            record_count = client.get_record_count('pharmacies', filters={'dataset_id': f'eq.{dataset_id}'})
         elif kind == 'states':
-            records = client.get_search_results(dataset_id=dataset_id, limit=9999)  
-            record_count = len(records) if isinstance(records, list) else 0
+            record_count = client.get_record_count('search_results', filters={'dataset_id': f'eq.{dataset_id}'})
         elif kind == 'validated':
-            # Get validated overrides count
-            validated_data = client.get_table_data('validated_overrides', filters={'dataset_id': f'eq.{dataset_id}'}, limit=9999)
-            record_count = len(validated_data) if isinstance(validated_data, list) else 0
+            record_count = client.get_record_count('validated_overrides', filters={'dataset_id': f'eq.{dataset_id}'})
         else:
             record_count = 0
     except Exception as e:
@@ -668,6 +664,29 @@ def render_dataset_manager():
         last_load_time = st.session_state.loaded_data.get('last_load_time')
         
         st.success("✅ **Data Loaded**")
+        
+        # Debug mode data structure analysis
+        debug_mode = st.session_state.get('debug_mode', False)
+        if debug_mode:
+            comprehensive_results = get_comprehensive_results()
+            if not comprehensive_results.empty:
+                # Count records and analyze states
+                total_records = len(comprehensive_results)
+                unique_states = comprehensive_results['search_state'].nunique()
+                state_counts = comprehensive_results['search_state'].value_counts().head(10)
+                unique_pharmacies = comprehensive_results['pharmacy_name'].nunique()
+                
+                st.expander("🔍 **Debug: get_all_results_with_context Data Structure**", expanded=True).write(f"""
+                **Matrix Analysis:**
+                - **Total Records:** {total_records:,}
+                - **Unique Pharmacies:** {unique_pharmacies:,}
+                - **Unique States:** {unique_states}
+                - **Records per State:** {state_counts.to_dict()}
+                
+                **Data Structure:** Each record represents a (pharmacy, search_state, result) combination.
+                Only states with actual search data are included (no empty matrix expansion).
+                """)
+        
         st.info(f"""
         **Loaded Dataset Combination:**
         - **Pharmacies:** {loaded_tags['pharmacies']}

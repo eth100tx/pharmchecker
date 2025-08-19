@@ -67,6 +67,10 @@ class UnifiedClient:
         result = self.supabase_client.get_table_data_via_rest(table, limit=limit, filters=filters)
         return result if isinstance(result, list) else []
     
+    def get_record_count(self, table: str, filters: Dict = None) -> int:
+        """Get count of records in table (efficient - no data transfer)"""
+        return self.supabase_client.get_record_count_via_rest(table, filters)
+    
     def get_active_backend(self) -> str:
         """Get the name of the active backend"""
         return "Supabase"

@@ -149,6 +149,38 @@ class SupabaseClient:
         except Exception as e:
             return [{"error": str(e)}]
     
+    def get_record_count_via_rest(self, table: str, filters: Dict = None) -> int:
+        """Get count of records in table via REST API"""
+        try:
+            url = f"{self.url}/rest/v1/{table}"
+            headers = self.headers.copy()
+            headers['Prefer'] = 'count=exact'
+            
+            params = {"select": "id"}
+            if filters:
+                params.update(filters)
+            
+            response = requests.get(url, headers=headers, params=params, timeout=10)
+            
+            if response.status_code in [200, 206]:  # 206 = Partial Content (paginated)
+                content_range = response.headers.get('content-range', '')
+                if '/' in content_range:
+                    total_count = content_range.split('/')[-1]
+                    if total_count.isdigit():
+                        return int(total_count)
+            
+            # If count header failed, fallback to high-limit actual count
+            fallback_params = params.copy()
+            fallback_params['limit'] = '100000'  # Very high limit
+            
+            fallback_response = requests.get(url, headers=self.headers, params=fallback_params, timeout=60)
+            if fallback_response.status_code == 200:
+                return len(fallback_response.json())
+            
+            return 0
+        except Exception as e:
+            return 0
+    
     def call_rpc_function(self, function_name: str, params: Dict = None) -> Any:
         """Call an RPC function via REST API"""
         try:
