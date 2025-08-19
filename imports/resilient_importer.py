@@ -10,6 +10,7 @@ import json
 import gc
 import hashlib
 import shutil
+import csv
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass, asdict
 from datetime import datetime, timezone
@@ -178,6 +179,53 @@ class ResilientImporter:
             'newly_uploaded': 0,
             'error_files': []
         }
+        
+        # CSV debug logging setup
+        self.debug_csv_file = None
+        self.debug_csv_writer = None
+        if debug_log:
+            self._setup_csv_debug_logging()
+    
+    def _setup_csv_debug_logging(self):
+        """Setup CSV debug logging to track every parse.json file processing"""
+        timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
+        csv_filename = f'resilient_import_debug_{timestamp}.csv'
+        
+        self.debug_csv_file = open(csv_filename, 'w', newline='', encoding='utf-8')
+        self.debug_csv_writer = csv.DictWriter(self.debug_csv_file, fieldnames=[
+            'json_file_path',
+            'pharmacy_name', 
+            'search_state',
+            'search_timestamp',
+            'png_file_exists',
+            'licenses_found',
+            'processing_status',
+            'record_ids_inserted',
+            'error_message',
+            'processed_at'
+        ])
+        self.debug_csv_writer.writeheader()
+        
+        logger.info(f"📝 CSV debug logging enabled: {csv_filename}")
+    
+    def _log_file_processing(self, json_path: str, pharmacy_name: str, search_state: str, 
+                           search_timestamp: str, png_exists: bool, licenses_count: int,
+                           status: str, record_ids: List[str] = None, error_msg: str = None):
+        """Log file processing details to CSV"""
+        if self.debug_csv_writer:
+            self.debug_csv_writer.writerow({
+                'json_file_path': json_path,
+                'pharmacy_name': pharmacy_name,
+                'search_state': search_state, 
+                'search_timestamp': search_timestamp or '',
+                'png_file_exists': png_exists,
+                'licenses_found': licenses_count,
+                'processing_status': status,
+                'record_ids_inserted': ','.join(record_ids) if record_ids else '',
+                'error_message': error_msg or '',
+                'processed_at': datetime.now(timezone.utc).isoformat()
+            })
+            self.debug_csv_file.flush()
     
     def _setup_api_client(self):
         """Setup Supabase API client"""
@@ -301,12 +349,17 @@ class ResilientImporter:
                 
                 if licenses:
                     # Use first license number for dedup key when license exists
-                    license_number = licenses[0].get('license_number', 'NULL_LICENSE')
-                    dedup_key = f"{dataset_id}|{pharmacy_name}|{search_state}|{license_number}"
+                    license_number = licenses[0].get('license_number')
+                    if license_number:  # Check if license_number is not None/empty
+                        dedup_key = f"{dataset_id}|{pharmacy_name}|{search_state}|{license_number}"
+                    else:
+                        # License object exists but license_number is null - treat as no license
+                        json_filename = Path(json_file).name
+                        dedup_key = f"{dataset_id}|{pharmacy_name}|{search_state}|no_license|{json_filename}"
                 else:
-                    # No license - use source_html_file from raw JSON for uniqueness
-                    source_html_file = metadata.get('source_html_file', 'unknown_file')
-                    dedup_key = f"{dataset_id}|{pharmacy_name}|{search_state}|no_license|{source_html_file}"
+                    # No license - use parse.json file path for uniqueness (always available and unique)
+                    json_filename = Path(json_file).name
+                    dedup_key = f"{dataset_id}|{pharmacy_name}|{search_state}|no_license|{json_filename}"
                 
                 # Track PNG analysis
                 if png_file.exists():
@@ -615,6 +668,7 @@ class ResilientImporter:
         
         # Prepare search results data
         search_results = []
+        file_to_record_mapping = {}  # Track which files produce which records
         
         for work_item in work_state.work_items:
             try:
@@ -635,11 +689,15 @@ class ResilientImporter:
                 
                 # Process licenses
                 licenses = search_result.get('licenses', [])
+                png_exists = Path(work_item.png_path).exists()
+                
+                # Track this file for CSV logging
+                file_record_ids = []
                 
                 if not licenses:
                     # No results found
                     result_status = search_result.get('result_status', 'not_found')
-                    search_results.append({
+                    record = {
                         'dataset_id': work_state.dataset_id,
                         'search_name': work_item.pharmacy_name,
                         'search_state': work_item.search_state,
@@ -649,13 +707,17 @@ class ResilientImporter:
                         'meta': json.dumps(metadata),
                         'raw': json.dumps(data),
                         'image_hash': work_item.sha256_hash
-                    })
+                    }
+                    search_results.append(record)
+                    # Generate a unique ID for this record for tracking
+                    record_id = f"{work_state.dataset_id}-{work_item.pharmacy_name}-{work_item.search_state}-no_license"
+                    file_record_ids.append(record_id)
                 else:
                     # Process each license
-                    for license_info in licenses:
+                    for i, license_info in enumerate(licenses):
                         address_info = license_info.get('address', {})
                         
-                        search_results.append({
+                        record = {
                             'dataset_id': work_state.dataset_id,
                             'search_name': work_item.pharmacy_name,
                             'search_state': work_item.search_state,
@@ -674,10 +736,56 @@ class ResilientImporter:
                             'meta': json.dumps(metadata),
                             'raw': json.dumps(data),
                             'image_hash': work_item.sha256_hash
-                        })
+                        }
+                        search_results.append(record)
+                        # Generate a unique ID for this record for tracking
+                        license_num = license_info.get('license_number', f'license_{i}')
+                        record_id = f"{work_state.dataset_id}-{work_item.pharmacy_name}-{work_item.search_state}-{license_num}"
+                        file_record_ids.append(record_id)
+                
+                # Store mapping for later CSV logging with unique identifiers
+                source_html = metadata.get('source_html_file', 'unknown')
+                file_to_record_mapping[work_item.json_path] = {
+                    'pharmacy_name': work_item.pharmacy_name,
+                    'search_state': work_item.search_state,
+                    'search_timestamp': work_item.search_timestamp,
+                    'png_exists': png_exists,
+                    'licenses_count': len(licenses),
+                    'record_ids': file_record_ids,
+                    'status': 'prepared',
+                    'source_html_file': source_html,  # Add unique identifier
+                    'json_path': work_item.json_path   # Store the exact path
+                }
+                
+                # Debug: Log how many records this file will generate
+                if self.debug_log:
+                    source_html = metadata.get('source_html_file', 'unknown')
+                    logger.debug(f"📂 FILE PREPARATION: {work_item.json_path}")
+                    logger.debug(f"   🏪 Pharmacy: {work_item.pharmacy_name}")
+                    logger.debug(f"   🗺️  State: {work_item.search_state}")
+                    logger.debug(f"   📄 Source HTML: {source_html}")
+                    logger.debug(f"   📜 Licenses found: {len(licenses)}")
+                    logger.debug(f"   📋 Records to create: {len(file_record_ids)}")
+                    for idx, record_id in enumerate(file_record_ids):
+                        license_num = licenses[idx].get('license_number', 'no_license') if idx < len(licenses) else 'no_license'
+                        logger.debug(f"     [{idx+1}] {record_id} (license: {license_num})")
                 
             except Exception as e:
+                error_msg = str(e)
                 logger.error(f"❌ Failed to prepare data for {work_item.work_id}: {e}")
+                
+                # Log failure to CSV
+                self._log_file_processing(
+                    work_item.json_path,
+                    work_item.pharmacy_name,
+                    work_item.search_state,
+                    work_item.search_timestamp,
+                    Path(work_item.png_path).exists(),
+                    0,
+                    'failed_preparation',
+                    [],
+                    error_msg
+                )
                 continue
         
         # Import in batches with error isolation
@@ -720,17 +828,42 @@ class ResilientImporter:
                 # Try batch insert first
                 response = self.session.post(f"{self.api_url}/search_results", json=cleaned_batch)
                 
+                # Debug: Log batch insert attempt details
+                if self.debug_log and response.status_code == 409:
+                    logger.debug(f"🔍 BATCH INSERT CONFLICT - HTTP 409 Details:")
+                    logger.debug(f"   Response: {response.text[:500]}...")  # First 500 chars
+                    logger.debug(f"   Batch size: {len(cleaned_batch)} records")
+                
                 if response.status_code == 201:
                     # Success!
-                    imported_count = len(response.json()) if response.json() else len(batch)
+                    imported_records = response.json() if response.json() else []
+                    imported_count = len(imported_records)
                     total_imported += imported_count
                     completed_batches += 1
                     logger.info(f"📥 Batch {batch_num}/{total_batches}: {imported_count} records imported")
                     
+                    # Log successful records to CSV
+                    self._log_batch_success_to_csv(batch, imported_records, file_to_record_mapping)
+                    
                 elif response.status_code == 409:
                     # Conflict - handle duplicates with individual UPSERT
                     logger.info(f"🔄 Batch {batch_num}/{total_batches} has conflicts, using individual UPSERT...")
-                    batch_imported = self._handle_batch_conflicts(cleaned_batch, batch_num)
+                    
+                    # Debug: Show what's in this conflicting batch
+                    if self.debug_log:
+                        logger.debug(f"🔍 CONFLICT BATCH ANALYSIS - {len(cleaned_batch)} records:")
+                        seen_keys = {}
+                        for i, record in enumerate(cleaned_batch):
+                            key = f"{record.get('search_name')}/{record.get('search_state')}/{record.get('license_number')}"
+                            if key in seen_keys:
+                                logger.debug(f"   DUPLICATE KEY IN BATCH: {key}")
+                                logger.debug(f"     First occurrence: record {seen_keys[key]}")
+                                logger.debug(f"     Duplicate: record {i}")
+                            else:
+                                seen_keys[key] = i
+                            logger.debug(f"   [{i}] {key}")
+                    
+                    batch_imported = self._handle_batch_conflicts(cleaned_batch, batch_num, file_to_record_mapping)
                     total_imported += batch_imported
                     completed_batches += 1
                     
@@ -767,6 +900,9 @@ class ResilientImporter:
             except requests.exceptions.RequestException as e:
                 failed_batches += 1
                 logger.error(f"❌ Batch {batch_num}/{total_batches} failed: {e}")
+                
+                # Log failed batch to CSV
+                self._log_batch_failure_to_csv(batch, str(e), file_to_record_mapping)
                 
                 # Enhanced debugging for 400 errors
                 if hasattr(e, 'response') and e.response:
@@ -812,8 +948,100 @@ class ResilientImporter:
         
         logger.info(f"✅ Import complete: {total_imported} records in {completed_batches}/{total_batches} batches "
                    f"({failed_batches} failed) in {duration:.1f}s")
+        
+        # Update stats with final import count
+        self.stats['records_imported'] = total_imported
     
-    def _handle_batch_conflicts(self, batch: List[Dict], batch_num: int) -> int:
+    def _log_batch_success_to_csv(self, batch: List[Dict], imported_records: List[Dict], 
+                                 file_mapping: Dict) -> None:
+        """Log successful batch import to CSV with actual record IDs"""
+        # For each record in the batch, find the corresponding file and log success
+        for i, record in enumerate(batch):
+            # Find the original file that produced this record using source_html_file for precision
+            matching_file = None
+            record_source_html = None
+            
+            # Extract source_html_file from record's raw data
+            try:
+                if record.get('raw'):
+                    raw_data = json.loads(record['raw'])
+                    record_source_html = raw_data.get('metadata', {}).get('source_html_file')
+            except:
+                pass
+            
+            # Match by source_html_file first (most precise), fallback to name+state+timestamp
+            for file_path, file_info in file_mapping.items():
+                if record_source_html and file_info.get('source_html_file') == record_source_html:
+                    matching_file = file_path
+                    break
+                elif (not record_source_html and 
+                      file_info['pharmacy_name'] == record.get('search_name') and 
+                      file_info['search_state'] == record.get('search_state') and
+                      file_info['search_timestamp'] == record.get('search_ts')):
+                    matching_file = file_path
+                    break
+            
+            if matching_file:
+                file_info = file_mapping[matching_file]
+                # Use the imported record ID if available, otherwise use our tracked ID
+                actual_record_id = str(imported_records[i].get('id', file_info['record_ids'][0])) if i < len(imported_records) else file_info['record_ids'][0]
+                
+                self._log_file_processing(
+                    matching_file,
+                    file_info['pharmacy_name'],
+                    file_info['search_state'],
+                    file_info['search_timestamp'],
+                    file_info['png_exists'],
+                    file_info['licenses_count'],
+                    'imported_successfully',
+                    [actual_record_id],
+                    None
+                )
+    
+    def _log_batch_failure_to_csv(self, batch: List[Dict], error_msg: str, 
+                                 file_mapping: Dict) -> None:
+        """Log failed batch import to CSV"""
+        for record in batch:
+            # Find the original file that produced this record using source_html_file for precision
+            matching_file = None
+            record_source_html = None
+            
+            # Extract source_html_file from record's raw data
+            try:
+                if record.get('raw'):
+                    raw_data = json.loads(record['raw'])
+                    record_source_html = raw_data.get('metadata', {}).get('source_html_file')
+            except:
+                pass
+            
+            # Match by source_html_file first (most precise), fallback to name+state+timestamp
+            for file_path, file_info in file_mapping.items():
+                if record_source_html and file_info.get('source_html_file') == record_source_html:
+                    matching_file = file_path
+                    break
+                elif (not record_source_html and 
+                      file_info['pharmacy_name'] == record.get('search_name') and 
+                      file_info['search_state'] == record.get('search_state') and
+                      file_info['search_timestamp'] == record.get('search_ts')):
+                    matching_file = file_path
+                    break
+            
+            if matching_file:
+                file_info = file_mapping[matching_file]
+                self._log_file_processing(
+                    matching_file,
+                    file_info['pharmacy_name'],
+                    file_info['search_state'],
+                    file_info['search_timestamp'],
+                    file_info['png_exists'],
+                    file_info['licenses_count'],
+                    'import_failed',
+                    [],
+                    error_msg
+                )
+    
+    def _handle_batch_conflicts(self, batch: List[Dict], batch_num: int, 
+                               file_mapping: Dict) -> int:
         """Handle batch conflicts by doing individual UPSERT operations"""
         imported_count = 0
         
@@ -823,6 +1051,7 @@ class ResilientImporter:
                 filters = {
                     'dataset_id': f'eq.{record["dataset_id"]}',
                     'search_state': f'eq.{record["search_state"]}',
+                    'search_name': f'eq.{record["search_name"]}',  # BUG FIX: Add search_name to filters!
                 }
                 
                 # Handle NULL license_number case
@@ -832,11 +1061,49 @@ class ResilientImporter:
                 else:
                     filters['license_number'] = f'eq.{license_number}'
                 
+                # Debug: Show what we're looking for
+                if self.debug_log:
+                    logger.debug(f"🔍 UPSERT [{i+1}/{len(batch)}] LOOKUP: {record['search_name']}/{record['search_state']}/{license_number}")
+                    
+                    # Show source file for context
+                    record_source = "unknown"
+                    try:
+                        if record.get('raw'):
+                            raw_data = json.loads(record['raw'])
+                            record_source = raw_data.get('metadata', {}).get('source_html_file', 'unknown')
+                    except:
+                        pass
+                    logger.debug(f"   📄 Source: {record_source}")
+                    
+                    for key, value in filters.items():
+                        logger.debug(f"   🔍 {key}: {value}")
+                
                 # Check for existing record
                 response = self.session.get(f"{self.api_url}/search_results", params=filters)
                 response.raise_for_status()
                 
                 existing_records = response.json()
+                
+                # Debug: Show what we found
+                if self.debug_log:
+                    logger.debug(f"🔍 LOOKUP RESULTS: Found {len(existing_records)} existing records")
+                    for idx, existing in enumerate(existing_records):
+                        existing_source = "unknown"
+                        try:
+                            if existing.get('raw'):
+                                existing_raw = json.loads(existing['raw'])
+                                existing_source = existing_raw.get('metadata', {}).get('source_html_file', 'unknown')
+                        except:
+                            pass
+                        logger.debug(f"   [{idx+1}] ID:{existing.get('id')} Name:'{existing.get('search_name')}' License:{existing.get('license_number')} Source:{existing_source}")
+                
+                # Special debug for suspected conflicts
+                if existing_records and record['search_name'] != existing_records[0]['search_name']:
+                    logger.warning(f"⚠️  POTENTIAL NAME MISMATCH:")
+                    logger.warning(f"   New record: '{record['search_name']}'")
+                    logger.warning(f"   Found existing: '{existing_records[0]['search_name']}'")
+                    logger.warning(f"   License: {license_number}")
+                    logger.warning(f"   This suggests database constraint doesn't include search_name!")
                 
                 if existing_records:
                     # Record exists - check if we should update based on timestamp
@@ -844,16 +1111,32 @@ class ResilientImporter:
                     existing_ts = existing_record.get('search_ts')
                     new_ts = record.get('search_ts')
                     
+                    # Enhanced debugging for duplicate analysis
+                    existing_source = "unknown"
+                    new_source = "unknown"
+                    try:
+                        if existing_record.get('raw'):
+                            existing_raw = json.loads(existing_record['raw'])
+                            existing_source = existing_raw.get('metadata', {}).get('source_html_file', 'unknown')
+                        if record.get('raw'):
+                            new_raw = json.loads(record['raw'])
+                            new_source = new_raw.get('metadata', {}).get('source_html_file', 'unknown')
+                    except:
+                        pass
+                    
                     should_update = False
                     if new_ts and existing_ts:
                         # Compare timestamps - update if new is later
                         should_update = new_ts > existing_ts
+                        timestamp_comparison = f"new={new_ts} vs existing={existing_ts} -> {'UPDATE' if should_update else 'SKIP'}"
                     elif new_ts and not existing_ts:
                         # New has timestamp, existing doesn't - update
                         should_update = True
+                        timestamp_comparison = f"new={new_ts} vs existing=NULL -> UPDATE"
                     else:
                         # Skip if both null or new is null
                         should_update = False
+                        timestamp_comparison = f"new={new_ts} vs existing={existing_ts} -> SKIP"
                     
                     if should_update:
                         # Update existing record
@@ -865,21 +1148,87 @@ class ResilientImporter:
                         )
                         response.raise_for_status()
                         imported_count += 1
-                        logger.debug(f"📝 Updated record: {record['search_name']}/{record['search_state']}/{license_number}")
+                        logger.debug(f"📝 UPDATED: {record['search_name']}/{record['search_state']}/{license_number}")
+                        logger.debug(f"   🔄 {timestamp_comparison}")
+                        logger.debug(f"   📄 Existing source: {existing_source}")
+                        logger.debug(f"   📄 New source: {new_source}")
+                        logger.debug(f"   🆔 Record ID: {existing_record.get('id', 'unknown')}")
                     else:
-                        logger.debug(f"⏭️  Skipped (older): {record['search_name']}/{record['search_state']}/{license_number}")
+                        logger.debug(f"⏭️  SKIPPED: {record['search_name']}/{record['search_state']}/{license_number}")
+                        logger.debug(f"   🔄 {timestamp_comparison}")
+                        logger.debug(f"   📄 Existing source: {existing_source}")
+                        logger.debug(f"   📄 New source: {new_source}")
+                        logger.debug(f"   🆔 Record ID: {existing_record.get('id', 'unknown')}")
                 else:
                     # Record doesn't exist - insert new
                     response = self.session.post(f"{self.api_url}/search_results", json=[record])
                     response.raise_for_status()
                     imported_count += 1
-                    logger.debug(f"📥 Inserted new: {record['search_name']}/{record['search_state']}/{license_number}")
+                    
+                    # Enhanced debugging for new inserts
+                    new_source = "unknown"
+                    try:
+                        if record.get('raw'):
+                            new_raw = json.loads(record['raw'])
+                            new_source = new_raw.get('metadata', {}).get('source_html_file', 'unknown')
+                    except:
+                        pass
+                    
+                    result = response.json()
+                    new_record_id = result[0].get('id', 'unknown') if result else 'unknown'
+                    
+                    logger.debug(f"📥 INSERTED NEW: {record['search_name']}/{record['search_state']}/{license_number}")
+                    logger.debug(f"   📄 Source file: {new_source}")
+                    logger.debug(f"   ⏰ Timestamp: {record.get('search_ts', 'None')}")
+                    logger.debug(f"   🆔 New record ID: {new_record_id}")
                 
             except Exception as e:
                 logger.error(f"❌ Failed to UPSERT record {i+1} in batch {batch_num}: {e}")
                 continue
         
         logger.info(f"🔄 Batch {batch_num}: {imported_count}/{len(batch)} records upserted successfully")
+        
+        # Log upsert results to CSV
+        for record in batch:
+            # Find the original file that produced this record using source_html_file for precision
+            matching_file = None
+            record_source_html = None
+            
+            # Extract source_html_file from record's raw data
+            try:
+                if record.get('raw'):
+                    raw_data = json.loads(record['raw'])
+                    record_source_html = raw_data.get('metadata', {}).get('source_html_file')
+            except:
+                pass
+            
+            # Match by source_html_file first (most precise), fallback to name+state+timestamp
+            for file_path, file_info in file_mapping.items():
+                if record_source_html and file_info.get('source_html_file') == record_source_html:
+                    matching_file = file_path
+                    break
+                elif (not record_source_html and 
+                      file_info['pharmacy_name'] == record.get('search_name') and 
+                      file_info['search_state'] == record.get('search_state') and
+                      file_info['search_timestamp'] == record.get('search_ts')):
+                    matching_file = file_path
+                    break
+            
+            if matching_file:
+                file_info = file_mapping[matching_file]
+                record_id = f"{record.get('dataset_id')}-{record.get('search_name')}-{record.get('search_state')}-{record.get('license_number', 'no_license')}"
+                self._log_file_processing(
+                    matching_file,
+                    file_info['pharmacy_name'],
+                    file_info['search_state'],
+                    file_info['search_timestamp'],
+                    file_info['png_exists'],
+                    file_info['licenses_count'],
+                    'upserted',
+                    [record_id],
+                    None
+                )
+        
         return imported_count
     
     def check_for_duplicates(self, work_state: WorkState) -> None:
@@ -913,10 +1262,23 @@ class ResilientImporter:
                 for key, records in list(duplicates.items())[:5]:  # Show first 5
                     logger.warning(f"  {key}: {len(records)} records")
                     if self.debug_log:
-                        for record in records:
-                            raw_data = json.loads(record['raw'])
-                            source_file = raw_data.get('metadata', {}).get('source_html_file', 'unknown')
-                            logger.debug(f"    Source: {source_file}")
+                        logger.debug(f"    🔍 DUPLICATE GROUP ANALYSIS: {key}")
+                        unique_sources = set()
+                        for i, record in enumerate(records):
+                            try:
+                                raw_data = json.loads(record['raw'])
+                                source_file = raw_data.get('metadata', {}).get('source_html_file', 'unknown')
+                                unique_sources.add(source_file)
+                                record_id = record.get('id', 'unknown')
+                                search_ts = record.get('search_ts', 'None')
+                                license_num = record.get('license_number', 'None')
+                                logger.debug(f"      [{i+1}] ID:{record_id} License:{license_num} TS:{search_ts}")
+                                logger.debug(f"           Source: {source_file}")
+                            except Exception as e:
+                                logger.debug(f"      [{i+1}] Error parsing record: {e}")
+                        logger.debug(f"    📄 Unique source files: {len(unique_sources)}")
+                        for source in unique_sources:
+                            logger.debug(f"      - {source}")
             else:
                 logger.info("✅ No duplicates found")
                 
@@ -992,6 +1354,10 @@ class ResilientImporter:
         print(f"⏱️  Elapsed: {elapsed//60:.0f}m {elapsed%60:.0f}s  |  Backend: Supabase")
         print(f"📁 Total Files: {work_state.total_files}  |  Images: {work_state.total_images}")
         
+        # Show records imported count
+        total_imported = work_state.phases.get('import', {}).get('total_imported', 0)
+        print(f"📥 Records Imported: {total_imported}")
+        
         print("\n📊 Phase Summary:")
         for phase_name, phase_data in work_state.phases.items():
             status_icon = "✅" if phase_data['status'] == 'completed' else "🟡" if phase_data['status'] == 'in_progress' else "⏳"
@@ -1049,6 +1415,11 @@ class ResilientImporter:
         except Exception as e:
             logger.error(f"💥 Import failed: {e}")
             return False
+        finally:
+            # Close CSV debug file if open
+            if self.debug_csv_file:
+                self.debug_csv_file.close()
+                logger.info("📝 CSV debug log closed")
     
     def resume_import(self, state_file: str = "work_state.json") -> bool:
         """Resume import from saved state"""
@@ -1082,6 +1453,11 @@ class ResilientImporter:
         except Exception as e:
             logger.error(f"💥 Resume failed: {e}")
             return False
+        finally:
+            # Close CSV debug file if open
+            if self.debug_csv_file:
+                self.debug_csv_file.close()
+                logger.info("📝 CSV debug log closed")
 
 
 def main():

@@ -84,7 +84,7 @@ def test_supabase_storage():
     print(f"✅ SHA256: {content_hash}")
     print(f"✅ Storage path: {storage_path}")
     
-    bucket_name = 'image_cache'
+    bucket_name = 'imagecache'
     
     try:
         # Test 1: Check if bucket exists, create if needed

@@ -426,7 +426,7 @@ python -m imports.api_importer pharmacies test.csv test_tag --backend supabase
 ### Screenshot Integration
 ```bash
 # Test local storage
-ls -la image_cache/
+ls -la imagecache/
 
 # Test path resolution
 python -c "

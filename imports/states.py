@@ -1280,7 +1280,7 @@ class StateImporter(BaseImporter):
             organized_path = f"{base_dir.name}/{state_code}/{cached_filename}"
             
             # Copy to image cache directory
-            cache_dir = Path('image_cache')
+            cache_dir = Path('imagecache')
             cache_file_path = cache_dir / organized_path
             
             # Create directories if they don't exist

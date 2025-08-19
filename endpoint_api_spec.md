@@ -195,7 +195,7 @@ Authorization: Bearer <supabase_jwt_token>
       "validated_license": null,
       "result_status": "results_found",
       "search_timestamp": "2024-01-15T10:30:00Z",
-      "screenshot_path": "image_cache/states_jan_2024/FL/Belmar_Pharmacy.20240115_1030.png",
+      "screenshot_path": "imagecache/states_jan_2024/FL/Belmar_Pharmacy.20240115_1030.png",
       "screenshot_storage_type": "local",
       "screenshot_file_size": 245760,
       "pharmacy_address": "123 Main St",
@@ -325,7 +325,7 @@ Authorization: Bearer <supabase_jwt_token>
     },
     "screenshots": [
       {
-        "path": "image_cache/states_jan_2024/FL/Belmar_Pharmacy.20240115_1030.png",
+        "path": "imagecache/states_jan_2024/FL/Belmar_Pharmacy.20240115_1030.png",
         "storage_type": "local",
         "file_size": 245760,
         "created_at": "2024-01-15T10:30:00Z"
@@ -581,7 +581,7 @@ Authorization: Bearer <supabase_jwt_token>
   "license_status": "Active",
   "score_overall": 98.5,
   "override_type": null,
-  "screenshot_path": "image_cache/...",
+  "screenshot_path": "imagecache/...",
   "pharmacy_address": "123 Main St",
   "result_address": "123 Main Street"
 }

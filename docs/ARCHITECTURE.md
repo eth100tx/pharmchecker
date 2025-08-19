@@ -304,7 +304,7 @@ app.py (main)
 
 ### Storage Architecture
 ```
-image_cache/
+imagecache/
 ├── <states_tag>/
 │   ├── FL/
 │   │   ├── pharmacy_name.timestamp.png

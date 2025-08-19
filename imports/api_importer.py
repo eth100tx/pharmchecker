@@ -98,22 +98,41 @@ class APIImporter:
                         # Parse JSON string to Python list
                         try:
                             state_licenses = json.loads(state_licenses_raw)
-                        except json.JSONDecodeError:
-                            print(f"⚠️  Invalid JSON in state_licenses for {row['name']}, using []")
-                            state_licenses = []
+                        except json.JSONDecodeError as e:
+                            # Try to handle Python list syntax by converting to JSON
+                            try:
+                                # Replace single quotes with double quotes for JSON compliance
+                                json_str = state_licenses_raw.replace("'", '"')
+                                state_licenses = json.loads(json_str)
+                            except json.JSONDecodeError:
+                                print(f"⚠️  Invalid JSON in state_licenses for {row['name']}: {e}")
+                                print(f"     Raw value: {repr(state_licenses_raw)}")
+                                state_licenses = []
                     else:
                         # Already a list or other type
                         state_licenses = list(state_licenses_raw) if state_licenses_raw else []
                     
+                    # Handle all fields with proper NaN checking
+                    def safe_str(value, default=''):
+                        """Convert value to string, handling NaN/None safely"""
+                        if pd.isna(value) or value is None:
+                            return default
+                        return str(value).strip()
+                    
                     pharmacy_data = {
                         'dataset_id': dataset_id,
-                        'name': row['name'],
-                        'address': row['address'],
-                        'city': row['city'],
-                        'state': row['state'],
-                        'zip': str(row['zip']),
+                        'name': safe_str(row['name']),
+                        'address': safe_str(row['address']),
+                        'city': safe_str(row['city']),
+                        'state': safe_str(row['state']),
+                        'zip': safe_str(row['zip']),
                         'state_licenses': state_licenses
                     }
+                    
+                    # Validate required fields are not empty
+                    if not pharmacy_data['name']:
+                        print(f"⚠️  Skipping pharmacy with empty name at row {index + 2}")
+                        continue
                     
                     response = self.session.post(f"{self.api_url}/pharmacies", json=pharmacy_data)
                     response.raise_for_status()

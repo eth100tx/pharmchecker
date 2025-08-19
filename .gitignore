@@ -5,9 +5,10 @@
 
 # Temporary files and directories
 tmp/
+temp/
 
 # Cached images
-image_cache/
+imagecache/
 
 # Database files
 *.db
@@ -40,3 +41,6 @@ Thumbs.db
 
 # MCP configuration (if contains sensitive data)
 .mcp.json
+
+# Supabase local development
+supabase/

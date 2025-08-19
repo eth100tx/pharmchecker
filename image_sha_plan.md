@@ -7,7 +7,7 @@ This plan migrates PharmChecker's image handling system from timestamp-based fil
 ## Current System Analysis
 
 ### Current Architecture
-- **Storage**: Local `image_cache/` directory with organized paths: `{tag}/{state}/{filename}.{timestamp}.{ext}`
+- **Storage**: Local `imagecache/` directory with organized paths: `{tag}/{state}/{filename}.{timestamp}.{ext}`
 - **Database**: `images` table linking to `search_results` via `search_result_id`
 - **Import Flow**: Copy images during state search import, generate timestamp-based filenames
 - **Issues**: 
@@ -95,7 +95,7 @@ CREATE INDEX ix_assets_access ON image_assets(last_accessed);
 
 #### Local Storage
 ```
-image_cache/
+imagecache/
 ├── sha256/
 │   ├── ab/
 │   │   ├── cd/
@@ -107,7 +107,7 @@ image_cache/
 
 #### Supabase Storage
 ```
-Bucket: image_cache
+Bucket: imagecache
 ├── sha256/ab/cd/abcd1234...5678.png
 ├── sha256/ef/gh/efgh5678...9abc.jpg
 ```
@@ -203,7 +203,7 @@ from supabase import create_client
 class ImageStorage:
     def __init__(self, backend_type: str = 'local'):
         self.backend_type = backend_type
-        self.local_cache_dir = Path('image_cache')
+        self.local_cache_dir = Path('imagecache')
         
     def compute_sha256(self, file_path: Path) -> str:
         """Compute SHA256 hash of file content"""
@@ -237,7 +237,7 @@ class ImageStorage:
         
         # Upload to Supabase bucket
         with open(source_path, 'rb') as f:
-            response = self.supabase.storage.from_('image_cache').upload(
+            response = self.supabase.storage.from_('imagecache').upload(
                 storage_path, f, file_options={'content-type': 'image/png'}
             )
         

@@ -208,11 +208,11 @@ Images show as broken links
 
 **Solution:**
 ```bash
-# Check image_cache directory exists
-ls -la image_cache/
+# Check imagecache directory exists
+ls -la imagecache/
 
 # Check permissions
-chmod -R 755 image_cache/
+chmod -R 755 imagecache/
 
 # Verify image paths in database
 psql -U postgres -d pharmchecker -c "

@@ -67,7 +67,7 @@ CREATE TABLE IF NOT EXISTS search_results (
   created_at       TIMESTAMP NOT NULL DEFAULT now(),
   
   -- Unique constraint to handle deduplication during import
-  CONSTRAINT unique_search_result UNIQUE(dataset_id, search_state, license_number)
+  CONSTRAINT unique_search_result UNIQUE(dataset_id, search_state, search_name, license_number)
 );
 
 -- Computed match scores (uses IDs within dataset pairs)  

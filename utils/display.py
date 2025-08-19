@@ -36,7 +36,7 @@ def get_image_display_url(storage_path: str, storage_type: str) -> Optional[str]
         
     if storage_type == 'local':
         # For local files, prepend the image cache directory
-        full_path = os.path.join('image_cache', storage_path)
+        full_path = os.path.join('imagecache', storage_path)
         if os.path.exists(full_path):
             return full_path
         else:
@@ -68,7 +68,7 @@ def get_image_display_url(storage_path: str, storage_type: str) -> Optional[str]
                 supabase = create_client(supabase_url, service_key)
                 
                 # Generate signed URL (valid for 1 hour)
-                signed_url_response = supabase.storage.from_('image_cache').create_signed_url(
+                signed_url_response = supabase.storage.from_('imagecache').create_signed_url(
                     storage_path, expires_in=3600
                 )
                 
@@ -108,6 +108,7 @@ def format_status_badge(status: str) -> str:
         'match': '✅',
         'weak match': '⚠️', 
         'no match': '❌',
+        'not found': '🔍',
         'no data': '⭕',
         'validated': '🔵',
         'validated present': '🔵',

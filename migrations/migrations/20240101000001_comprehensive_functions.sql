@@ -101,7 +101,7 @@ all_results AS (
     ms.score_city_state_zip,
     CASE 
       WHEN img.organized_path IS NOT NULL 
-      THEN 'image_cache/' || img.organized_path 
+      THEN 'imagecache/' || img.organized_path 
       ELSE NULL 
     END AS screenshot_path,
     img.storage_type AS screenshot_storage_type,

@@ -81,6 +81,18 @@ import_scrape_states:
 		--debug-log \
 		--batch-size 25
 
+import_scrape_states2:
+	@echo "📥 Importing scrape data..."
+	@python3 imports/resilient_importer.py \
+		--states-dir /home/eric/ai/pharmchecker/data/2025-08-18 \
+		--tag Aug-18-scrape \
+		--created-by makefile_user \
+		--description "CA TX FL NY PA MI IL" \
+		--max-workers 16 \
+		--max-uploads 10 \
+		--debug-log \
+		--batch-size 25
+
 # Import states_baseline2 data  
 import_test_states2:
 	@echo "📥 Importing states_baseline2 ..."
