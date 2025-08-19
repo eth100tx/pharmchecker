@@ -1462,21 +1462,27 @@ def render_states_dashboard():
         st.warning("No pharmacy-state combinations found")
         return
     
-    # Status legend
+    # Status legend with info popups
     st.markdown("**Legend:**")
     col1, col2, col3, col4, col5, col6 = st.columns(6)
     with col1:
         st.markdown("✅ **Match**")
+        st.caption("Address match ≥85%")
     with col2:
         st.markdown("⚠️ **Weak**")
+        st.caption("Address match 60-84%")
     with col3:
         st.markdown("❌ **No Match**")
+        st.caption("Address match <60%")
     with col4:
         st.markdown("🔍 **Not Found**")
+        st.caption("Search successful, 0 results")
     with col5:
         st.markdown("🔵 **Validated**")
+        st.caption("Manually validated override")
     with col6:
         st.markdown("⭕ **No Data**")
+        st.caption("Score/record missing - needs debug")
     
     st.markdown("---")
     
@@ -1932,8 +1938,8 @@ def render_results_matrix():
     
     # No warning filtering applied
     
-    # Collapsible summary statistics with validated count
-    total_checked = len(results_df)
+    # Enhanced summary with state breakdown first, then totals
+    total_license_claims = len(results_df)
     matches_validated = len(filtered_data[filtered_data['status_bucket'] == 'match'])
     weak_matches = len(filtered_data[filtered_data['status_bucket'] == 'weak match'])
     no_matches_validated = len(filtered_data[filtered_data['status_bucket'] == 'no match'])
@@ -1943,10 +1949,40 @@ def render_results_matrix():
     not_found = len(filtered_data[filtered_data['status_bucket'] == 'not found'])
     no_data = len(filtered_data[filtered_data['status_bucket'] == 'no data'])
     
-    with st.expander(f"📊 Summary: {total_checked} total | {matches_validated} matches | {weak_matches} weak | {no_matches_validated} no match | {total_validated} validated | {not_found} not found | {no_data} no data", expanded=False):
+    # Calculate breakdown by state
+    state_breakdown = {}
+    for state in filtered_data['search_state'].unique():
+        state_data = filtered_data[filtered_data['search_state'] == state]
+        state_breakdown[state] = {
+            'total': len(state_data),
+            'match': len(state_data[state_data['status_bucket'] == 'match']),
+            'weak': len(state_data[state_data['status_bucket'] == 'weak match']),
+            'no_match': len(state_data[state_data['status_bucket'] == 'no match']),
+            'validated': len(state_data[state_data['status_bucket'].isin(['validated', 'validated present', 'validated empty'])]),
+            'not_found': len(state_data[state_data['status_bucket'] == 'not found']),
+            'no_data': len(state_data[state_data['status_bucket'] == 'no data'])
+        }
+    
+    # Sort states for consistent display
+    sorted_states = sorted(state_breakdown.keys())
+    
+    with st.expander(f"📊 Summary: {total_license_claims} license claims | {matches_validated} matches | {weak_matches} weak | {no_matches_validated} no match | {total_validated} validated", expanded=False):
+        
+        # State-by-state breakdown first
+        st.markdown("**📍 Breakdown by State:**")
+        for state in sorted_states:
+            stats = state_breakdown[state]
+            st.markdown(f"**{state}:** {stats['total']} claims | "
+                       f"✅ {stats['match']} | ⚠️ {stats['weak']} | ❌ {stats['no_match']} | "
+                       f"🔵 {stats['validated']} | 🔍 {stats['not_found']} | ⭕ {stats['no_data']}")
+        
+        st.markdown("---")
+        
+        # Overall totals below
+        st.markdown("**🎯 Overall Totals:**")
         col1, col2, col3, col4, col5, col6, col7 = st.columns(7)
         with col1:
-            st.metric("Total", total_checked)
+            st.metric("License Claims", total_license_claims)
         with col2:
             st.metric("Matches", matches_validated)
         with col3:
@@ -1960,6 +1996,30 @@ def render_results_matrix():
         with col7:
             st.metric("No Data", no_data)
     
+    # Add icon key with info popups (same as States Dashboard)
+    st.markdown("**Legend:**")
+    col1, col2, col3, col4, col5, col6 = st.columns(6)
+    with col1:
+        st.markdown("✅ **Match**")
+        st.caption("Address match ≥85%")
+    with col2:
+        st.markdown("⚠️ **Weak**") 
+        st.caption("Address match 60-84%")
+    with col3:
+        st.markdown("❌ **No Match**")
+        st.caption("Address match <60%")
+    with col4:
+        st.markdown("🔍 **Not Found**")
+        st.caption("Search successful, 0 results")
+    with col5:
+        st.markdown("🔵 **Validated**")
+        st.caption("Manually validated override")
+    with col6:
+        st.markdown("⭕ **No Data**")
+        st.caption("Score/record missing - needs debug")
+    
+    st.markdown("---")
+
     # Display results table with maximum space
     st.markdown("**Results**")
     selected_row = display_dense_results_table(filtered_data, debug_mode)
