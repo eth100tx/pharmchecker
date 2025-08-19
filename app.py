@@ -1321,6 +1321,7 @@ def get_status_icon_only(status):
         'match': '✅',
         'weak match': '⚠️', 
         'no match': '❌',
+        'not found': '🔍',  # Magnifying glass - searched but not found
         'no data': '⭕',  # Hollow circle - better represents empty/no data
         'validated': '🔵',
         'validated present': '🔵',
@@ -1416,7 +1417,9 @@ def render_states_dashboard():
         
         # Calculate status buckets (same as Results Matrix)
         def calculate_status_simple(row):
-            if pd.isna(row.get('result_id')):
+            if row.get('result_status') == 'no_results_found':
+                return 'not found'
+            elif pd.isna(row.get('result_id')):
                 return 'no data'
             elif pd.notna(row.get('override_type')):
                 return 'validated'  
@@ -1442,7 +1445,7 @@ def render_states_dashboard():
     
     # Status legend
     st.markdown("**Legend:**")
-    col1, col2, col3, col4, col5 = st.columns(5)
+    col1, col2, col3, col4, col5, col6 = st.columns(6)
     with col1:
         st.markdown("✅ **Match**")
     with col2:
@@ -1450,8 +1453,10 @@ def render_states_dashboard():
     with col3:
         st.markdown("❌ **No Match**")
     with col4:
-        st.markdown("🔵 **Validated**")
+        st.markdown("🔍 **Not Found**")
     with col5:
+        st.markdown("🔵 **Validated**")
+    with col6:
         st.markdown("⭕ **No Data**")
     
     st.markdown("---")
@@ -1466,41 +1471,21 @@ def render_states_dashboard():
     total_pharmacies = len(grid_df)
     total_states = len([col for col in grid_df.columns if col != 'Pharmacy'])
     
-    # Show grid size and add controls for large datasets
-    if total_pharmacies > 20 or total_states > 10:
-        col1, col2, col3 = st.columns(3)
-        
-        with col1:
-            st.info(f"📊 **Grid:** {total_pharmacies} pharmacies × {total_states} states")
-        
-        with col2:
-            # Pharmacy search/filter
-            pharmacy_filter = st.text_input("Filter pharmacies:", placeholder="Search by name...", key="pharmacy_filter")
-            
-        with col3:
-            # Pagination control
-            show_all = st.checkbox("Show all", value=total_pharmacies <= 25, help="Uncheck to enable pagination")
-        
-        # Apply pharmacy filter
-        if pharmacy_filter:
-            filtered_df = grid_df[grid_df['Pharmacy'].str.contains(pharmacy_filter, case=False, na=False)]
-        else:
-            filtered_df = grid_df.copy()
-        
-        # Apply pagination if needed
-        if not show_all and len(filtered_df) > 25:
-            page_size = 25
-            max_page = (len(filtered_df) - 1) // page_size + 1
-            page_num = st.number_input("Page", min_value=1, max_value=max_page, value=1, key="page_selector") - 1
-            start_idx = page_num * page_size
-            end_idx = min(start_idx + page_size, len(filtered_df))
-            display_df = filtered_df.iloc[start_idx:end_idx].copy()
-            st.caption(f"📄 Showing {start_idx + 1}-{end_idx} of {len(filtered_df)} pharmacies" + 
-                      (f" (filtered from {total_pharmacies})" if pharmacy_filter else ""))
-        else:
-            display_df = filtered_df.copy()
-            if pharmacy_filter and len(display_df) < total_pharmacies:
-                st.caption(f"📄 Showing {len(display_df)} of {total_pharmacies} pharmacies (filtered)")
+    # Show grid size and pharmacy filter
+    col1, col2 = st.columns(2)
+    
+    with col1:
+        st.info(f"📊 **Grid:** {total_pharmacies} pharmacies × {total_states} states")
+    
+    with col2:
+        # Pharmacy search/filter
+        pharmacy_filter = st.text_input("Filter pharmacies:", placeholder="Search by name...", key="pharmacy_filter")
+    
+    # Apply pharmacy filter
+    if pharmacy_filter:
+        display_df = grid_df[grid_df['Pharmacy'].str.contains(pharmacy_filter, case=False, na=False)]
+        if len(display_df) < total_pharmacies:
+            st.caption(f"📄 Showing {len(display_df)} of {total_pharmacies} pharmacies (filtered)")
     else:
         display_df = grid_df.copy()
     
@@ -1854,7 +1839,9 @@ def render_results_matrix():
     # Update status buckets using simple validation check
     # Simple status calculation (replacing calculate_status_simple)
     def calculate_status_simple(row):
-        if pd.isna(row.get('result_id')):
+        if row.get('result_status') == 'no_results_found':
+            return 'not found'
+        elif pd.isna(row.get('result_id')):
             return 'no data'
         elif pd.notna(row.get('override_type')):
             return 'validated'  
@@ -1934,8 +1921,8 @@ def render_results_matrix():
     validated_present = len(filtered_data[filtered_data['status_bucket'] == 'validated present'])
     validated_empty = len(filtered_data[filtered_data['status_bucket'] == 'validated empty'])
     total_validated = validated_present + validated_empty
-    not_found = len(filtered_data[(filtered_data['status_bucket'] == 'no data') & filtered_data['result_id'].notna()])
-    no_data = len(filtered_data[(filtered_data['status_bucket'] == 'no data') & filtered_data['result_id'].isna()])
+    not_found = len(filtered_data[filtered_data['status_bucket'] == 'not found'])
+    no_data = len(filtered_data[filtered_data['status_bucket'] == 'no data'])
     
     with st.expander(f"📊 Summary: {total_checked} total | {matches_validated} matches | {weak_matches} weak | {no_matches_validated} no match | {total_validated} validated | {not_found} not found | {no_data} no data", expanded=False):
         col1, col2, col3, col4, col5, col6, col7 = st.columns(7)
