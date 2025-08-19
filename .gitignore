@@ -44,3 +44,9 @@ Thumbs.db
 
 # Supabase local development
 supabase/
+
+# Import debug files
+resilient_import_debug_*.csv
+
+# Working state files
+work_state.json
