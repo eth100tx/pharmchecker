@@ -1891,14 +1891,23 @@ def render_results_matrix():
     
     # Keep all records including validated ones
     
-    # Get available states and statuses for filters
+    # Get available pharmacies, states, and statuses for filters
+    available_pharmacies = sorted(results_df['pharmacy_name'].dropna().unique().tolist())
     available_states = sorted(results_df['search_state'].dropna().unique().tolist())
     available_statuses = sorted(results_df['status_bucket'].dropna().unique().tolist())
     
-    # Single line filters with inline labels
-    col1, col2, col3 = st.columns([2, 2, 3])
+    # Four filters in one line: Pharmacy, State, Status, Score Range
+    col1, col2, col3, col4 = st.columns([3, 2, 2, 2])
     
     with col1:
+        pharmacy_options = ['All'] + available_pharmacies
+        selected_pharmacies = st.multiselect("Pharmacy:", pharmacy_options, default=['All'])
+        if 'All' in selected_pharmacies:
+            pharmacy_filter = available_pharmacies
+        else:
+            pharmacy_filter = [p for p in selected_pharmacies if p != 'All']
+    
+    with col2:
         state_options = ['All'] + available_states
         selected_states = st.multiselect("State:", state_options, default=['All'])
         if 'All' in selected_states:
@@ -1906,15 +1915,15 @@ def render_results_matrix():
         else:
             state_filter = [s for s in selected_states if s != 'All']
     
-    with col2:
+    with col3:
         status_options = ['All'] + available_statuses
         selected_statuses = st.multiselect("Status:", status_options, default=['All'])
         if 'All' in selected_statuses:
             status_filter = available_statuses
         else:
             status_filter = [s for s in selected_statuses if s != 'All']
-            
-    with col3:
+    
+    with col4:
         score_range = st.slider("Score Range:", 0.0, 100.0, (0.0, 100.0))
         st.caption(f"{score_range[0]:.0f} - {score_range[1]:.0f}")
     
@@ -1922,6 +1931,9 @@ def render_results_matrix():
     
     # Apply filters
     filtered_data = results_df.copy()
+    
+    if pharmacy_filter:
+        filtered_data = filtered_data[filtered_data['pharmacy_name'].isin(pharmacy_filter)]
     
     if state_filter:
         filtered_data = filtered_data[filtered_data['search_state'].isin(state_filter)]
